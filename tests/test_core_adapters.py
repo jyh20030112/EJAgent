@@ -244,7 +244,8 @@ class OpenAIModelPortTests(unittest.IsolatedAsyncioTestCase):
                 ModelResponseCompleted(
                     AssistantMessage(
                         tool_calls=(ToolCall("call-1", "weather", {"city": "杭州"}),)
-                    )
+                    ),
+                    finish_reason="tool_calls",
                 )
             ],
         )

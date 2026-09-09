@@ -127,12 +127,14 @@ class OpenAIModelPort(ModelPort):
             options["stream_options"] = {"include_usage": True}
         if request.max_output_tokens is not None:
             options["max_completion_tokens"] = request.max_output_tokens
+        if request.response_format is not None:
+            options["response_format"] = thaw_json_value(request.response_format)
 
         response: Any | None = None
         content_parts: list[str] = []
         tool_calls: dict[int, _StreamingToolCall] = {}
         usage: ModelUsage | None = None
-        has_finish_reason = False
+        finish_reason: str | None = None
         try:
             response = await cancellation.run(client.chat.completions.create(**options))
             if response is None:
@@ -158,7 +160,7 @@ class OpenAIModelPort(ModelPort):
                     continue
                 choice = choices[0]
                 if getattr(choice, "finish_reason", None) is not None:
-                    has_finish_reason = True
+                    finish_reason = str(choice.finish_reason)
                 delta = getattr(choice, "delta", None)
                 if delta is None:
                     continue
@@ -223,7 +225,7 @@ class OpenAIModelPort(ModelPort):
                         if inspect.isawaitable(result):
                             await result
 
-        if not has_finish_reason:
+        if finish_reason is None:
             raise ModelProtocolError("OpenAI stream ended without a finish_reason")
         normalized_calls = tuple(
             _completed_tool_call(tool_calls[index]) for index in sorted(tool_calls)
@@ -237,7 +239,9 @@ class OpenAIModelPort(ModelPort):
             raise ModelProtocolError(
                 f"invalid OpenAI assistant message: {exc}"
             ) from exc
-        yield ModelResponseCompleted(message=message, usage=usage)
+        yield ModelResponseCompleted(
+            message=message, usage=usage, finish_reason=finish_reason
+        )
 
 
 def _message_to_openai(message: ContextMessage) -> dict[str, Any]:

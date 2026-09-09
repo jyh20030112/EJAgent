@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Protocol, TypeAlias
 
 from ejagent.contracts.control import CancellationToken
+from ejagent.contracts.json import JsonObject, freeze_json_object
 from ejagent.contracts.messages import (
     AssistantMessage,
     ContextMessage,
@@ -75,8 +76,15 @@ class ModelRequest:
     messages: tuple[ContextMessage, ...]
     tools: tuple[ToolDefinition, ...] = ()
     max_output_tokens: int | None = None
+    response_format: JsonObject | None = None
 
     def __post_init__(self) -> None:
+        if self.response_format is not None:
+            object.__setattr__(
+                self,
+                "response_format",
+                freeze_json_object(self.response_format, label="response_format"),
+            )
         if self.max_output_tokens is not None and (
             isinstance(self.max_output_tokens, bool)
             or not isinstance(self.max_output_tokens, int)
@@ -119,12 +127,17 @@ class ModelResponseCompleted:
 
     message: AssistantMessage
     usage: ModelUsage | None = None
+    finish_reason: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.message, AssistantMessage):
             raise TypeError("completed model message must be AssistantMessage")
         if self.usage is not None and not isinstance(self.usage, ModelUsage):
             raise TypeError("completed model usage must be ModelUsage or None")
+        if self.finish_reason is not None and (
+            not isinstance(self.finish_reason, str) or not self.finish_reason.strip()
+        ):
+            raise ValueError("finish_reason must be non-empty text or None")
 
 
 ModelStreamEvent: TypeAlias = (

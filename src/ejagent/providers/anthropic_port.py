@@ -106,6 +106,12 @@ class AnthropicModelPort(ModelPort):
         client = self._client
         if client is None:
             raise RuntimeError("Anthropic client is not initialized")
+        if request.response_format is not None:
+            raise ModelCallError(
+                FailureCode.PROVIDER_ERROR,
+                "AnthropicModelPort does not support response_format; configure "
+                "ModelJudge(response_format=None) for prompt-based JSON output",
+            )
 
         system, messages = _request_messages(request.messages)
         if not messages:
@@ -260,7 +266,9 @@ class AnthropicModelPort(ModelPort):
             cache_read_tokens,
             cache_write_tokens,
         )
-        yield ModelResponseCompleted(message=message, usage=usage)
+        yield ModelResponseCompleted(
+            message=message, usage=usage, finish_reason=stop_reason
+        )
 
 
 def _field(value: Any, name: str) -> Any:
