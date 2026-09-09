@@ -158,6 +158,52 @@ missing-evidence list. Invalid structures, unsupported citations, and tool reque
 produce unknown. This validation checks protocol and traceability, not the truth
 of every semantic judgment; application-specific calibration still matters.
 
+### Output format and recovery
+
+Judge requests default to `response_format={"type": "json_object"}`. The
+OpenAI-compatible adapter forwards `ModelRequest.response_format` unchanged as a
+detached JSON object. Callers may supply a provider-supported strict schema via
+`ModelJudge(model, response_format={"type": "json_schema", "json_schema": ...})`.
+JSON mode alone does not validate fields or evidence references; local validation
+always runs. Set `response_format=None` for prompt-only providers. The native
+Anthropic adapter currently rejects this passthrough option explicitly; configure
+its Judge with `response_format=None` instead of silently dropping the option.
+Actor requests omit it unless explicitly configured by their caller.
+
+A response consisting entirely of one complete JSON Markdown fence (with a
+`json` label or no label) is unwrapped and validated normally. Valid `pass`,
+`fail`, `unknown`, and `conflict` judgments retain their meaning. Surrounding
+prose, multiple blocks, partial JSON, duplicate keys, invalid fields, and invented
+references are never guessed or repaired. Recovering a fence does not make an
+extra model request or reject the Actor's completion.
+
+After a fenced or invalid response, the next actual Judge request in that Run
+receives a `TransientInstruction` with source `judge:output_format`. It requests
+raw JSON with the required fields without changing the criterion or evidence.
+The instruction survives cache hits, clears after a valid plain JSON response,
+counts toward the prompt byte limit, and is removed when the Run closes. It
+never enters Actor Context or committed Conversation.
+
+`JudgeLimits.max_format_retries` defaults to **1** (set **0** to disable). Invalid
+JSON or response fields may trigger one internal Judge retry over the same
+evidence snapshot. All attempts share one evaluation timeout, request/token
+budgets, output cap, and cancellation. A valid negative or insufficient-evidence
+judgment, provider error, refusal, or truncated output is not retried internally.
+OpenAI `finish_reason` and Anthropic `stop_reason` are exposed through
+`ModelResponseCompleted.finish_reason`. Known truncation reasons produce unknown
+even if the partial output parses as JSON; adjust explicit output/context limits
+instead of repeatedly requesting the same truncated response. Missing content
+that violates the model-message protocol remains an unavailable response.
+
+`EvaluationReport.judge_attempts` records each admitted request's criterion,
+request/retry index, format-steering flag, outcome, short reason, and provider
+finish reason. Outcomes distinguish `valid`, `recovered_markdown`, `invalid_json`,
+`invalid_schema`, `truncated`, `refused`, and unavailable/interrupted responses.
+The JSONL journal and Streamlit evidence inspector include these records; cache
+hits do not replay old attempts. No raw response or hidden reasoning is stored
+in these diagnostics. Internal retries consume Judge usage, not Actor turns or
+completion-retry allowances.
+
 Harness automatically manages the judge model exposed by the evaluation monitor,
 deduplicating shared resources. Standalone users manage the ModelPort lifecycle.
 Custom providers must honor `ModelRequest.max_output_tokens` and report usage.

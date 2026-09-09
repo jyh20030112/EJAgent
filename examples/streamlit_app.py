@@ -569,6 +569,22 @@ def _render_trajectory(
             width="stretch",
         )
         with st.expander("Evidence and diagnostics"):
+            attempts = [
+                {
+                    "Checkpoint": item.checkpoint_id,
+                    "Criterion": attempt.criterion_id,
+                    "Request": attempt.request_index,
+                    "Format retry": attempt.retry_index,
+                    "Format steer": attempt.format_steered,
+                    "Outcome": attempt.outcome,
+                    "Finish reason": attempt.finish_reason,
+                    "Detail": attempt.detail,
+                }
+                for item in reports
+                for attempt in item.judge_attempts
+            ]
+            if attempts:
+                st.dataframe(attempts, hide_index=True, width="stretch")
             st.json(
                 {
                     "report_ref": report.report_ref,
