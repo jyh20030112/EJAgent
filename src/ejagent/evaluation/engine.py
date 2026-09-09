@@ -441,6 +441,11 @@ class GoalEvaluator:
             new,
             complete,
             self._cost(state, signal),
+            judge_attempts=self._judge.attempts(signal.run_id)[
+                work.judge_before.requests :
+            ]
+            if self._judge
+            else (),
         )
 
     def _cost(self, state: _RunState, signal: CheckpointSignal) -> EvaluationCost:
@@ -501,6 +506,11 @@ class GoalEvaluator:
             (),
             False,
             self._cost(state, signal),
+            judge_attempts=self._judge.attempts(signal.run_id)[
+                state.work.judge_before.requests :
+            ]
+            if self._judge
+            else (),
         )
 
     @staticmethod

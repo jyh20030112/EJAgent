@@ -141,6 +141,19 @@ class EvaluationCost:
 
 
 @dataclass(frozen=True, slots=True)
+class JudgeAttempt:
+    """One admitted judge request; includes format recovery, never raw output."""
+
+    criterion_id: str
+    request_index: int
+    retry_index: int
+    format_steered: bool
+    outcome: str
+    detail: str
+    finish_reason: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class EvaluationReport:
     run_id: str
     checkpoint_id: str
@@ -153,13 +166,20 @@ class EvaluationReport:
     new_evidence: tuple[str, ...]
     fact_capture_complete: bool
     cost: EvaluationCost
+    judge_attempts: tuple[JudgeAttempt, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "evidence", MappingProxyType(dict(self.evidence)))
         object.__setattr__(
             self, "diagnostics", MappingProxyType(dict(self.diagnostics))
         )
-        for name in ("requirements", "constraints", "invalidated_refs", "new_evidence"):
+        for name in (
+            "requirements",
+            "constraints",
+            "invalidated_refs",
+            "new_evidence",
+            "judge_attempts",
+        ):
             object.__setattr__(self, name, tuple(getattr(self, name)))
 
     @property

@@ -22,6 +22,7 @@ from ejagent.evaluation.types import (
     EvidenceSource,
     EvidenceUnavailable,
     ItemEvaluation,
+    JudgeAttempt,
     VerificationRequest,
     Verifier,
 )
@@ -31,6 +32,7 @@ __all__ = [
     "CompletionPolicy",
     "JudgeLimits",
     "JudgeUsage",
+    "JudgeAttempt",
     "ModelJudge",
     "CheckResult",
     "EvaluationCost",

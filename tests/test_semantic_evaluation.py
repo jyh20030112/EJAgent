@@ -230,6 +230,7 @@ class TestSemanticEvaluation(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(report.cost.model_output_tokens, 10)
         self.assertEqual(model.requests[0].tools, ())
         self.assertEqual(model.requests[0].max_output_tokens, 1024)
+        self.assertEqual(model.requests[0].response_format, {"type": "json_object"})
         self.assertNotIn(injection, model.requests[0].messages[0].content)
         self.assertIn(injection, model.requests[0].messages[1].content)
         self.assertNotIn("unused", model.requests[0].messages[1].content)
@@ -286,7 +287,7 @@ class TestSemanticEvaluation(unittest.IsolatedAsyncioTestCase):
                     report.requirements[0].status, EvaluationStatus.UNKNOWN
                 )
                 self.assertFalse(report.fact_capture_complete)
-                self.assertEqual(report.cost.model_requests, 1)
+                self.assertEqual(report.cost.model_requests, 2)
                 self.assertEqual(report.cost.model_unreported_requests, 0)
 
     async def test_conflict_remains_conflict(self) -> None:

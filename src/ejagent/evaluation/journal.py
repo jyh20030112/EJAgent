@@ -59,6 +59,7 @@ class JsonlEvaluationJournal:
             "new_evidence": report.new_evidence,
             "fact_capture_complete": report.fact_capture_complete,
             "cost": asdict(report.cost),
+            "judge_attempts": [asdict(attempt) for attempt in report.judge_attempts],
         }
         line = json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n"
         with self._lock:
