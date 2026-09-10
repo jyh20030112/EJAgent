@@ -22,6 +22,7 @@ from ejagent._trajectory.online import (
 from ejagent._trajectory.shadow import EnvironmentFact, FactValidity
 from ejagent.contracts.context import ContextPipeline
 from ejagent.contracts.control import CancellationToken
+from ejagent.contracts.evaluation import EvaluationPlan
 from ejagent.contracts.json import JsonObject
 from ejagent.evaluation.engine import GoalEvaluator
 from ejagent.evaluation.types import EvaluationReport, fingerprint
@@ -146,6 +147,9 @@ class EvaluationMonitor:
         )
         self._skipped: dict[str, int] = {}
 
+    def validate_plan(self, plan: EvaluationPlan) -> None:
+        self._evaluator.validate_plan(plan)
+
     @property
     def resources(self) -> tuple[object, ...]:
         return self._evaluator.resources
@@ -223,6 +227,7 @@ class EvaluationMonitor:
         )
         frame = replace(
             frame,
+            current_plan=update.signal.execution_plan,
             event=replace(
                 frame.event,
                 invalidated_fact_ids=tuple(

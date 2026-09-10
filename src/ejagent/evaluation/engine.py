@@ -90,6 +90,21 @@ class GoalEvaluator:
         self._judge = semantic_judge
         self._runs: dict[str, _RunState] = {}
 
+    def validate_plan(self, plan: EvaluationPlan) -> None:
+        """Reject unbound planning capabilities before the first actor action."""
+        for item in (*plan.requirements, *plan.constraints):
+            missing = set(item.evidence_keys) - self._sources.keys() - {"$completion"}
+            if missing:
+                raise ValueError(f"unconfigured evidence sources: {sorted(missing)}")
+            if item.semantic:
+                if self._judge is None:
+                    raise ValueError("semantic criterion requires a semantic judge")
+                method = item.guard_method
+            else:
+                method = item.method
+            if method is not None and method not in self._verifiers:
+                raise ValueError(f"unconfigured verification method: {method}")
+
     @property
     def resources(self) -> tuple[object, ...]:
         return (self._judge.model,) if self._judge is not None else ()

@@ -90,8 +90,11 @@ class CheckpointSignal:
     completion_candidate: CompletionCandidate | None = None
     tool_observations: tuple[ToolObservation, ...] = ()
     observations_complete: bool = True
+    execution_plan: str | None = None
 
     def __post_init__(self) -> None:
+        if self.execution_plan is not None:
+            _required_text(self.execution_plan, "execution_plan")
         if self.evaluation_plan is not None and not isinstance(
             self.evaluation_plan, EvaluationPlan
         ):

@@ -109,3 +109,35 @@ def boolean_field(field: str) -> Verifier:
         return _result(request, values[0] is True, f"observed {field}={values[0]}")
 
     return verify
+
+
+async def command_succeeded(
+    request: VerificationRequest, cancellation: CancellationToken
+) -> CheckResult:
+    """Verify exit status only; the host command defines the scope of this check."""
+    cancellation.raise_if_cancelled()
+    values = [item.value for item in request.evidence.values()]
+    if not values or any(
+        not isinstance(value, Mapping) or type(value.get("exit_code")) is not int
+        for value in values
+    ):
+        return CheckResult(
+            EvaluationStatus.UNKNOWN,
+            "command exit status unavailable",
+            missing_evidence=request.criterion.evidence_keys,
+        )
+    passed = all(
+        isinstance(value, Mapping) and value.get("exit_code") == 0 for value in values
+    )
+    details = "\n".join(
+        str(value.get("stderr", ""))[-2048:]
+        for value in values
+        if isinstance(value, Mapping)
+    )
+    return _result(
+        request,
+        passed,
+        "host verification command succeeded"
+        if passed
+        else "host verification command failed: " + details,
+    )

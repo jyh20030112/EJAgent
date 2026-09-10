@@ -9,7 +9,12 @@ from ejagent.contracts.evaluation import (
 from ejagent.evaluation.engine import GoalEvaluator
 from ejagent.evaluation.journal import JsonlEvaluationJournal
 from ejagent.evaluation.judge import JudgeLimits, JudgeUsage, ModelJudge
-from ejagent.evaluation.rules import boolean_field, file_exists, json_fields
+from ejagent.evaluation.rules import (
+    boolean_field,
+    command_succeeded,
+    file_exists,
+    json_fields,
+)
 from ejagent.evaluation.sources import FileEvidenceSource, ProbeEvidenceSource
 from ejagent.evaluation.trajectory import EvaluationMonitor, EvaluationReceipt
 from ejagent.evaluation.types import (
@@ -26,8 +31,11 @@ from ejagent.evaluation.types import (
     VerificationRequest,
     Verifier,
 )
+from ejagent.evaluation.workspace import CommandEvidenceSource, WorkspaceEvidenceSource
 
 __all__ = [
+    "CommandEvidenceSource",
+    "WorkspaceEvidenceSource",
     "CompletionMode",
     "CompletionPolicy",
     "JudgeLimits",
@@ -54,6 +62,7 @@ __all__ = [
     "VerificationRequest",
     "Verifier",
     "boolean_field",
+    "command_succeeded",
     "file_exists",
     "json_fields",
 ]

@@ -67,6 +67,16 @@ from ejagent.contracts.model import (
     ModelUsage,
 )
 from ejagent.contracts.observer import RunObserver
+from ejagent.contracts.planning import (
+    ExecutionPlan,
+    PlanningError,
+    PlanningRequest,
+    PlanningResult,
+    PlanStep,
+    StepStatus,
+    TaskDefinition,
+    TaskPlanner,
+)
 from ejagent.contracts.runs import (
     AuditRecord,
     FailureCode,
@@ -101,6 +111,14 @@ from ejagent.contracts.tools import (
 from ejagent.contracts.usage import RunUsage
 
 __all__ = [
+    "ExecutionPlan",
+    "PlanStep",
+    "PlanningError",
+    "PlanningRequest",
+    "PlanningResult",
+    "StepStatus",
+    "TaskDefinition",
+    "TaskPlanner",
     "CompletionCandidate",
     "CompletionMode",
     "CompletionPolicy",

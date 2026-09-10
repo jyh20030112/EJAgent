@@ -16,6 +16,7 @@ from ejagent.contracts.control import (
     ControlKind,
     ControlReceipt,
     ControlStatus,
+    RunCancelledError,
     SteeringInput,
 )
 from ejagent.contracts.conversation import ConversationSnapshot
@@ -29,9 +30,18 @@ from ejagent.contracts.lifecycle import ManagedResource
 from ejagent.contracts.messages import ConversationMessage
 from ejagent.contracts.model import ModelPort
 from ejagent.contracts.observer import RunObserver
+from ejagent.contracts.planning import (
+    ExecutionPlan,
+    PlanningError,
+    PlanningRequest,
+    PlanningResult,
+    TaskDefinition,
+    TaskPlanner,
+)
 from ejagent.contracts.runs import (
     AuditRecord,
     FailureCode,
+    RunDelta,
     RunFailure,
     RunIntent,
     RunLimits,
@@ -55,6 +65,7 @@ from ejagent.harness._control import (
     _QueuedFollowUp,
     _RunControls,
 )
+from ejagent.harness._planning import _PlanningSession, append_planning_audit
 from ejagent.kernel import RuntimeKernel, TrajectoryMonitor
 
 RunIdFactory = Callable[[], str]
@@ -94,6 +105,7 @@ class AgentHarness:
         model: ModelPort,
         tools: ToolExecutor,
         context: ContextPipeline | None = None,
+        planner: TaskPlanner | None = None,
         trajectory: TrajectoryMonitor | None = None,
         completion_policy: CompletionPolicy | None = None,
         initial_messages: Iterable[ConversationMessage] = (),
@@ -137,6 +149,17 @@ class AgentHarness:
             and trajectory is None
         ):
             raise ValueError("completion enforcement requires a trajectory monitor")
+        if planner is not None and trajectory is None:
+            raise ValueError("task planning requires a trajectory monitor")
+        if planner is not None and any(
+            t.name == "update_plan" for t in tools.definitions
+        ):
+            raise ValueError("update_plan is reserved when task planning is enabled")
+        self._planner = planner
+        self._trajectory = trajectory
+        self._last_task_definition: TaskDefinition | None = None
+        self._last_execution_plan: ExecutionPlan | None = None
+        self._active_planning: _PlanningSession | None = None
         self._agent_id = agent_id
         self._model = model
         self._tools = tools
@@ -165,6 +188,8 @@ class AgentHarness:
                 self._context,
                 *self._observers,
                 *getattr(trajectory, "resources", ()),
+                *getattr(planner, "resources", ()),
+                planner,
                 *resources,
             )
         )
@@ -179,6 +204,20 @@ class AgentHarness:
         self._observer_tasks: set[asyncio.Task[None]] = set()
         self._lifecycle_lock = asyncio.Lock()
         self._run_lock = asyncio.Lock()
+
+    @property
+    def last_task_definition(self) -> TaskDefinition | None:
+        """Latest prepared task; durable copies live in Run audit records."""
+        return self._last_task_definition
+
+    @property
+    def last_execution_plan(self) -> ExecutionPlan | None:
+        """Latest Run execution plan, including updates before a failed outcome."""
+        return (
+            self._active_planning.plan
+            if self._active_planning is not None
+            else self._last_execution_plan
+        )
 
     @property
     def agent_id(self) -> str:
@@ -393,28 +432,169 @@ class AgentHarness:
                 raise HarnessClosedError(f"agent harness {self._agent_id!r} is closed")
 
             base = self._snapshot
-            spec = RunSpec(
-                run_id=self._run_id_factory(),
-                base_revision=base.revision,
-                intent=intent,
-                task=task,
-                messages=base.messages,
-                limits=limits or self._limits,
-                configuration_revision=self._configuration_revision,
-                metadata=metadata or {},
-                evaluation_plan=evaluation_plan,
-                completion_policy=self._completion_policy,
-            )
+            run_id = self._run_id_factory()
             cancellation = CancellationSource()
             controls = _RunControls(self._steering_capacity)
             self._active_cancellation = cancellation
             self._active_controls = controls
             self._status = HarnessStatus.RUNNING
+            planning: _PlanningSession | None = None
+            preparation_records: list[AuditRecord] = []
+            self._last_task_definition = None
+            self._last_execution_plan = None
             try:
-                outcome = await self._kernel.run(
-                    spec,
-                    cancellation=cancellation.token,
-                    controls=controls,
+                try:
+                    if (
+                        self._planner is not None
+                        and task is not None
+                        and evaluation_plan is None
+                    ):
+                        preparation_records.append(
+                            AuditRecord(run_id, 1, "planning_started", self._clock())
+                        )
+                        prepared = await cancellation.token.run(
+                            self._planner.plan(
+                                PlanningRequest(
+                                    run_id,
+                                    task,
+                                    base.messages,
+                                    tuple(self._tools.definitions),
+                                ),
+                                cancellation=cancellation.token,
+                            )
+                        )
+                        if not isinstance(prepared, PlanningResult) or not isinstance(
+                            prepared.definition, TaskDefinition
+                        ):
+                            raise PlanningError(
+                                "planner must return a PlanningResult with TaskDefinition"
+                            )
+                        preparation_records.append(
+                            AuditRecord(
+                                run_id,
+                                2,
+                                "planning_usage",
+                                self._clock(),
+                                {
+                                    "model_requests": prepared.requests,
+                                    "usage": prepared.usage.to_dict()
+                                    if prepared.usage
+                                    else None,
+                                    "accounting": "separate_from_actor_run_usage",
+                                },
+                            )
+                        )
+                        definition = prepared.definition
+                        if (
+                            definition.execution_plan.version != 1
+                            or definition.execution_plan.based_on_checkpoint is not None
+                        ):
+                            raise PlanningError(
+                                "initial execution plan must be version 1 without a checkpoint"
+                            )
+                        evaluation_plan = definition.evaluation_plan
+                        assert self._trajectory is not None
+                        validate = getattr(self._trajectory, "validate_plan", None)
+                        if validate is not None:
+                            validate(evaluation_plan)
+                        planning = _PlanningSession(
+                            run_id=run_id,
+                            definition=definition,
+                            tools=self._tools,
+                            context=self._context,
+                            trajectory=self._trajectory,
+                            clock=self._clock,
+                        )
+                        self._active_planning = planning
+                        self._last_task_definition = definition
+                        self._last_execution_plan = definition.execution_plan
+                    spec = RunSpec(
+                        run_id=run_id,
+                        base_revision=base.revision,
+                        intent=intent,
+                        task=task,
+                        messages=base.messages,
+                        limits=limits or self._limits,
+                        configuration_revision=self._configuration_revision,
+                        metadata=metadata or {},
+                        evaluation_plan=evaluation_plan,
+                        completion_policy=self._completion_policy,
+                    )
+                except (PlanningError, RunCancelledError, ValueError) as exc:
+                    if not preparation_records:
+                        raise
+                    cancelled = isinstance(exc, RunCancelledError)
+                    if not any(r.kind == "planning_usage" for r in preparation_records):
+                        preparation_records.append(
+                            AuditRecord(
+                                run_id,
+                                len(preparation_records) + 1,
+                                "planning_usage",
+                                self._clock(),
+                                {
+                                    "model_requests": exc.requests
+                                    if isinstance(exc, PlanningError)
+                                    else None,
+                                    "usage": exc.usage.to_dict()
+                                    if isinstance(exc, PlanningError) and exc.usage
+                                    else None,
+                                    "accounting": "separate_from_actor_run_usage",
+                                    "incomplete": True,
+                                },
+                            )
+                        )
+                    failure = RunFailure(
+                        RunPhase.PREPARATION,
+                        FailureCode.CANCELLED
+                        if cancelled
+                        else FailureCode.POLICY_REJECTED,
+                        str(exc),
+                        cause=exc,
+                    )
+                    preparation_records.append(
+                        AuditRecord(
+                            run_id,
+                            len(preparation_records) + 1,
+                            "planning_failed",
+                            self._clock(),
+                            {"reason": str(exc)},
+                        )
+                    )
+                    outcome = RunOutcome(
+                        result=RunResult(
+                            run_id,
+                            RunStatus.CANCELLED if cancelled else RunStatus.FAILED,
+                            StopReason.EXTERNAL_ABORT
+                            if cancelled
+                            else StopReason.BEHAVIOR_STOP,
+                            0,
+                        ),
+                        delta=RunDelta(base.revision),
+                        failure=None if cancelled else failure,
+                    )
+                else:
+                    kernel = (
+                        self._kernel
+                        if planning is None
+                        else RuntimeKernel(
+                            model=self._model,
+                            tools=planning,
+                            context=planning,
+                            trajectory=planning,
+                            clock=self._clock,
+                        )
+                    )
+                    outcome = await kernel.run(
+                        spec, cancellation=cancellation.token, controls=controls
+                    )
+                if planning is not None:
+                    self._last_execution_plan = planning.plan
+                outcome = append_planning_audit(
+                    outcome,
+                    (
+                        *preparation_records,
+                        *(planning.records if planning is not None else ()),
+                    ),
                 )
                 discarded = controls.close()
                 self._active_controls = None
@@ -423,6 +603,7 @@ class AgentHarness:
                 self._dispatch_observers(base, outcome)
                 return outcome
             finally:
+                self._active_planning = None
                 controls.close()
                 self._active_cancellation = None
                 if self._active_controls is controls:
