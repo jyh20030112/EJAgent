@@ -139,6 +139,24 @@ to retry rejected completions within the same Run. Observation remains the defau
 See the [evaluation guide](docs/evaluation.md) for Harness wiring, custom checks,
 report logs, and the credential-free `examples/evaluate_artifact.py` example.
 
+## Generate Tasks and Revise Execution Plans
+
+Supply `AgentHarness(planner=ModelTaskPlanner(...))` to derive a task, goal,
+acceptance criteria, and initial execution steps from each query. The planner
+selects host-registered verification capabilities. The actor can call `update_plan`
+after checkpoint feedback; the Harness validates versions and records revisions,
+while acceptance conditions remain fixed for the Run.
+
+```bash
+uv run python examples/planned_feature.py         # Configured LLM
+uv run python examples/planned_feature.py --demo  # Scripted replies, real tests
+```
+
+The example saves actual model contexts and adds a Python feature in an isolated
+workspace. See [dynamic task planning](docs/task-planning.md) for composition,
+workspace evidence, limits, and audit inspection. Streamlit provider mode also
+supports **Dynamic task planning** for query-specific probe validation.
+
 ## Explore the Harness in Streamlit
 
 The repository includes an interactive app for exploring Harness behavior.
@@ -209,7 +227,8 @@ low-level monitor and trajectory Context adapter live in the internal
 
 Each `AgentHarness` currently manages one logical agent. Multi-agent coordination
 and arbitrary mid-Run pause/resume are not implemented. Trajectory-based Action
-denial and forced replanning remain policy work. Completion enforcement is
+denial and mandatory replanning remain policy work. Actor-proposed execution plan
+updates are supported for prepared tasks. Completion enforcement is
 available as an explicit, independently configured policy.
 
 ## Documentation

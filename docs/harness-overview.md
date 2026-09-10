@@ -64,7 +64,12 @@ Trajectory assessments provide observation and Context feedback. The independent
 `CompletionPolicy` defaults to observation. Enabling enforcement retries rejected
 text or tool completions within the same Run, bounded by retry and Run limits;
 rejected final prose remains in Audit instead of committed Conversation.
-Automatic Action denial and forced replanning remain separate policy work.
+Dynamic [task planning](task-planning.md) can generate a task definition and bind
+acceptance to registered capabilities before execution. The actor revises execution
+steps through a version-checked `update_plan` tool after checkpoint feedback.
+Acceptance remains fixed within the Run. Workspace and command sources support
+version-bound code verification. Automatic Action denial and mandatory replanning
+remain separate policy work.
 Completion feedback semantics and the policy choice are described in
 [ADR 0001](adr/0001-failed-completion-audit-continues-run.md).
 

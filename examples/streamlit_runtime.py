@@ -40,6 +40,7 @@ from ejagent.contracts import (
     UserMessage,
     thaw_json_value,
 )
+from ejagent.contracts.planning import ExecutionPlan, TaskDefinition
 from ejagent.evaluation import (
     CheckResult,
     CompletionMode,
@@ -59,10 +60,12 @@ from ejagent.evaluation import (
 )
 from ejagent.harness import AgentHarness, HarnessStatus
 from ejagent.kernel import CheckpointSignal
+from ejagent.planning import ModelTaskPlanner, VerificationCapability
 from ejagent.storage import JsonlSessionStore
 from ejagent.tools import FunctionTool, FunctionToolExecutor
 
 _ResultT = TypeVar("_ResultT")
+
 ModelFactory = Callable[[], ModelPort]
 PROBE_GOAL = (
     "Validate this Run's probes: A completes, B completes, and a completed A/B "
@@ -94,6 +97,7 @@ class RuntimeConfig:
     probe_delay_seconds: float = 1.5
     trajectory_enabled: bool = True
     semantic_review: bool = False
+    dynamic_planning: bool = False
     completion_enforced: bool = False
     completion_max_retries: int = 2
     judge_max_requests: int = 8
@@ -107,6 +111,8 @@ class RuntimeConfig:
         object.__setattr__(self, "store_root", Path(self.store_root).expanduser())
         if self.probe_delay_seconds <= 0:
             raise ValueError("probe_delay_seconds must be greater than zero")
+        if not isinstance(self.dynamic_planning, bool):
+            raise TypeError("dynamic_planning must be a boolean")
         if not isinstance(self.trajectory_enabled, bool):
             raise TypeError("trajectory_enabled must be a boolean")
         if not isinstance(self.semantic_review, bool) or not isinstance(
@@ -114,10 +120,10 @@ class RuntimeConfig:
         ):
             raise TypeError("evaluation options must be boolean")
         if not self.trajectory_enabled and (
-            self.semantic_review or self.completion_enforced
+            self.semantic_review or self.completion_enforced or self.dynamic_planning
         ):
             raise ValueError(
-                "semantic review and enforcement require trajectory feedback"
+                "planning, semantic review and enforcement require trajectory feedback"
             )
         CompletionPolicy(max_retries=self.completion_max_retries)
         JudgeLimits(
@@ -170,6 +176,8 @@ class RuntimeSnapshot:
     trajectory_updates: tuple[TrajectoryUpdate, ...] = ()
     trajectory_contexts: tuple[TrajectoryContextDelivery, ...] = ()
     evaluation_reports: tuple[EvaluationReport, ...] = ()
+    task_definition: TaskDefinition | None = None
+    execution_plan: ExecutionPlan | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -514,6 +522,7 @@ class StreamlitRuntimeController:
         *,
         model_factory: ModelFactory = DemoValidationModel,
         judge_factory: ModelFactory | None = None,
+        planner_factory: ModelFactory | None = None,
         command_timeout: float = 5.0,
     ) -> None:
         if command_timeout <= 0:
@@ -528,6 +537,9 @@ class StreamlitRuntimeController:
             raise ValueError(
                 "semantic review requires an explicit judge_factory with a custom Actor"
             )
+        if config.dynamic_planning and planner_factory is None:
+            raise ValueError("dynamic planning requires an explicit planner_factory")
+        self._planner_factory = planner_factory
         self._judge_factory = judge_factory or DemoJudgeModel
         self._command_timeout = command_timeout
         self._ready = threading.Event()
@@ -685,9 +697,24 @@ class StreamlitRuntimeController:
             self._trajectory_pipeline = _InspectableTrajectoryPipeline(
                 monitor.context_pipeline()
             )
+        planner = None
+        if self.config.dynamic_planning:
+            assert self._planner_factory is not None
+            template = _evaluation_plan(self.config.semantic_review)
+            planner = ModelTaskPlanner(
+                self._planner_factory(),
+                capabilities=tuple(
+                    VerificationCapability(item.criterion_id, item)
+                    for item in template.requirements
+                ),
+                environment={
+                    "scope": "Only this Run probe completion, overlap and optional probe summary can be verified. Other user goals are unsupported. Summary review requires both probes to finish and overlap."
+                },
+            )
         harness = AgentHarness(
             agent_id=self.config.agent_id,
             model=self._model_factory(),
+            planner=planner,
             tools=_validation_tools(recorder, self.config.probe_delay_seconds),
             trajectory=monitor,
             completion_policy=CompletionPolicy(
@@ -729,6 +756,7 @@ class StreamlitRuntimeController:
                     task,
                     evaluation_plan=_evaluation_plan(self.config.semantic_review)
                     if self.config.trajectory_enabled
+                    and not self.config.dynamic_planning
                     else None,
                 )
             )
@@ -752,7 +780,7 @@ class StreamlitRuntimeController:
         handle = self._require_harness().follow_up(
             task,
             evaluation_plan=_evaluation_plan(self.config.semantic_review)
-            if self.config.trajectory_enabled
+            if self.config.trajectory_enabled and not self.config.dynamic_planning
             else None,
         )
         self._record_control(handle.receipt)
@@ -791,6 +819,8 @@ class StreamlitRuntimeController:
             last_error=self._last_error,
             trajectory_updates=tuple(self._trajectory_updates),
             evaluation_reports=tuple(self._evaluation_reports),
+            task_definition=harness.last_task_definition,
+            execution_plan=harness.last_execution_plan,
             trajectory_contexts=(
                 tuple(self._trajectory_pipeline.deliveries)
                 if self._trajectory_pipeline is not None

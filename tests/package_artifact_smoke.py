@@ -25,6 +25,13 @@ def main() -> None:
 
     with zipfile.ZipFile(wheel) as archive:
         names = archive.namelist()
+        for required in (
+            "ejagent/planning/model.py",
+            "ejagent/contracts/planning.py",
+            "ejagent/evaluation/workspace.py",
+        ):
+            if required not in names:
+                raise AssertionError(f"wheel is missing {required}")
         if "ejagent/py.typed" not in names:
             raise AssertionError("wheel is missing ejagent/py.typed")
         if any(name.startswith("simagentplg/") for name in names):

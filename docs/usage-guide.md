@@ -706,7 +706,9 @@ Kernel 不启动资源、不读取或写入 Store，也不会提交 `outcome.del
 - 不支持真正暂停并序列化一个正在执行的 Run；`continue_run()` 是新 Run。
 - 多个 Run 会被 Harness 串行化；同一模型响应中的 tool calls 始终并发执行。
 - `RunPolicy` 尚未成为可注入实现；限制和终止逻辑目前在 Kernel 内。
-- 轨迹评估和 Context 反馈已可接入；依据评估自动拒绝动作、强制重新规划和拦截完成尚未实现。
+- 轨迹评估和 Context 反馈已可接入；完成门控支持同一 Run 内的有限重试。
+- [动态任务规划](task-planning.md)支持根据 query 生成验收计划，执行者通过 `update_plan`
+  修订执行步骤；自动拒绝普通动作和强制重新规划尚未提供。
 - Harness 会消费 Provider streaming，但当前只把 delta 写入 Audit，不向 `run()` 调用方
   实时推送。调用方只能在 Run 完成后读取 outcome。
 - `DerivedCompactionPipeline` 只生成派生视图，不减少 durable journal 大小。

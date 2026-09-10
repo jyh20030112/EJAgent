@@ -129,6 +129,22 @@ harness = AgentHarness(
 接入方法、自定义检查、评估日志
 及无需凭证的 `examples/evaluate_artifact.py` 示例见[评估模块指南](docs/evaluation.md)。
 
+## 动态任务与执行计划
+
+配置 `AgentHarness(planner=ModelTaskPlanner(...))` 后，每次 query 都可以动态生成
+任务、目标、验收项和初始执行步骤。模型只能引用宿主已注册的验证能力；执行者可以
+根据 checkpoint 反馈调用 `update_plan`。Harness 校验版本并记录修订，Run 内的验收
+条件保持固定，步骤标记完成不会替代证据验收。
+
+```bash
+uv run python examples/planned_feature.py         # 正式 LLM
+uv run python examples/planned_feature.py --demo  # 脚本模型，真实文件修改和测试
+```
+
+示例在独立工作目录中添加 Python 功能，保留实际模型上下文、计划版本、测试证据及
+审计记录。Streamlit 的 Provider 模式可启用 **Dynamic task planning**，按 query 选择
+探针验收项。接入方式与能力边界见[动态任务规划指南](docs/task-planning.md)。
+
 ## 在 Streamlit 中体验 Harness
 
 仓库提供一个用于体验 Harness 行为的交互式应用。确定性 Demo 模式不需要凭据，
@@ -189,7 +205,8 @@ Judge 替身；真实 Provider 模式会发起独立模型请求。界面展示�
 - 可选的在线轨迹评估与面向下一次决策的上下文反馈
 
 当前每个 `AgentHarness` 管理一个逻辑 Agent，尚未实现多 Agent 协调和任意时刻的
-mid-Run 暂停／恢复。依据轨迹自动拒绝动作、强制重新规划仍属于后续策略工作。完成
+mid-Run 暂停／恢复。已支持执行者根据反馈提出执行计划更新；自动拒绝动作和强制
+重新规划仍属于后续策略工作。完成
 审核拦截已作为独立的显式策略提供，默认仍仅观察。
 
 ## 文档

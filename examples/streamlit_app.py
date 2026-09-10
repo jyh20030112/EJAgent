@@ -57,6 +57,7 @@ def _start_controller(config: RuntimeConfig, mode: str) -> None:
     st.session_state[_CONTROLLER_KEY] = StreamlitRuntimeController(
         config,
         model_factory=model_factory,
+        planner_factory=model_factory if config.dynamic_planning else None,
         judge_factory=(DemoJudgeModel if mode == _DEMO_MODE else model_factory)
         if config.semantic_review
         else None,
@@ -120,13 +121,20 @@ def _render_sidebar() -> None:
             "Trajectory feedback", value=True, disabled=active
         )
         st.caption(
-            "Evaluates probe A, probe B, and their overlap for each Run. "
+            "Fixed planning evaluates probe A, probe B, and their overlap for each Run. "
             "Other chat goals are outside this evaluation."
         )
 
+        dynamic_planning = st.checkbox(
+            "Dynamic task planning",
+            value=False,
+            disabled=active or not trajectory_enabled or mode == _DEMO_MODE,
+            help="Use a separate model request to derive goals, acceptance criteria and an execution plan from your query. Only registered probe capabilities are available.",
+        )
         semantic_review = st.checkbox(
             "Semantic completion review",
             value=False,
+            help="Fixed plans include summary review. Dynamic planning exposes it as an optional capability, selected when applicable to the query.",
             disabled=active or not trajectory_enabled,
         )
         completion_enforced = st.checkbox(
@@ -172,6 +180,11 @@ def _render_sidebar() -> None:
                         max_tokens=int(max_tokens) if token_budget_enabled else None,
                         probe_delay_seconds=float(probe_delay),
                         trajectory_enabled=trajectory_enabled,
+                        dynamic_planning=bool(
+                            dynamic_planning
+                            and trajectory_enabled
+                            and mode == _PROVIDER_MODE
+                        ),
                         semantic_review=bool(semantic_review and trajectory_enabled),
                         completion_enforced=bool(
                             completion_enforced and trajectory_enabled
@@ -460,7 +473,9 @@ def _render_trajectory(
         st.info("Trajectory feedback is disabled. Stop the runtime to enable it.")
         return
     st.caption(
-        "Coverage measures three probe requirements: A completes, B completes, "
+        "Coverage measures the current Run's dynamically selected acceptance criteria."
+        if controller.config.dynamic_planning
+        else "Coverage measures three probe requirements: A completes, B completes, "
         "and a completed pair overlaps, plus optional final-answer review. "
         "Details below cover the latest Run in this runtime; Audit retains receipts."
     )
@@ -472,6 +487,16 @@ def _render_trajectory(
             else "observe only"
         )
     )
+    if controller.config.dynamic_planning:
+        st.caption(
+            "Dynamic planning selects probe acceptance conditions from the current query. Planner costs are recorded separately in Audit."
+        )
+        if snapshot.task_definition is not None:
+            with st.expander("Task definition and acceptance conditions"):
+                st.json(thaw_json_value(snapshot.task_definition.to_dict()))
+        if snapshot.execution_plan is not None:
+            with st.expander("Current execution plan", expanded=True):
+                st.json(thaw_json_value(snapshot.execution_plan.to_dict()))
     updates = snapshot.trajectory_updates
     if not updates:
         st.info(

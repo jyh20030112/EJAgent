@@ -7,7 +7,10 @@ is an independent, explicit Harness setting.
 
 ## Bind criteria to a Run
 
-Configure evidence and methods once, then give each Run its own immutable plan:
+Configure evidence and methods once, then give each Run its own immutable plan.
+A plan can also be generated from a query by the optional
+[task planner](task-planning.md), which binds criteria to this same registry:
+
 
 ```python
 from ejagent.evaluation import (
@@ -268,3 +271,13 @@ Run the standalone artifact example without credentials:
 uv run python examples/evaluate_artifact.py result.json
 uv run python examples/evaluate_artifact.py result.json --journal evaluations.jsonl
 ```
+
+## Code workspace verification
+
+`WorkspaceEvidenceSource` captures explicit UTF-8 paths and their versions.
+`CommandEvidenceSource` executes a host-configured command against those dependencies
+and caches its result for unchanged checkpoints within the Run. Use
+`command_succeeded` to verify exit status; file changes invalidate old results,
+and changes during execution make the evidence unavailable. Command timeouts and
+output bounds are configurable. See the [planning guide](task-planning.md#workspace-and-command-evidence)
+and [feature example](../examples/planned_feature.py) for a complete integration.

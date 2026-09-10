@@ -512,3 +512,78 @@ class StreamlitAppSmokeTests(unittest.TestCase):
                 self.assertFalse(app.exception)
             finally:
                 controller.close()
+
+
+class DynamicPlanningControllerTests(unittest.TestCase):
+    def test_query_bound_plan_replaces_fixed_three_probe_acceptance(self) -> None:
+        from ejagent.contracts import ToolCall
+        from tests.test_task_planning import CapturedModel, revise
+
+        payload = {
+            "task": "Run only probe B",
+            "goal": "Probe B completes",
+            "criteria": [
+                {
+                    "id": "b_only",
+                    "capability": "probe_b_completed",
+                    "description": "Probe B completes in this Run",
+                }
+            ],
+            "steps": [
+                {
+                    "id": "run_b",
+                    "description": "Run probe B",
+                    "requirement_ids": ["b_only"],
+                    "status": "pending",
+                }
+            ],
+            "unknowns": [],
+            "unsupported": [],
+        }
+        actor = CapturedModel(
+            [
+                revise,
+                AssistantMessage(tool_calls=(ToolCall("b", "parallel_probe_b", {}),)),
+                AssistantMessage("Probe B completed"),
+            ]
+        )
+        planning_model = CapturedModel([AssistantMessage(json.dumps(payload))])
+        with tempfile.TemporaryDirectory() as directory:
+            controller = StreamlitRuntimeController(
+                RuntimeConfig(
+                    store_root=Path(directory),
+                    probe_delay_seconds=0.01,
+                    dynamic_planning=True,
+                    completion_enforced=True,
+                ),
+                model_factory=lambda: actor,
+                planner_factory=lambda: planning_model,
+            )
+            try:
+                controller.start_run("Run only probe B")
+                snapshot = _wait_for(controller, lambda s: s.latest_outcome is not None)
+                self.assertTrue(snapshot.latest_outcome.result.succeeded)
+                self.assertEqual(
+                    [
+                        x.criterion_id
+                        for x in snapshot.task_definition.evaluation_plan.requirements
+                    ],
+                    ["b_only"],
+                )
+                self.assertEqual(snapshot.execution_plan.version, 2)
+                self.assertEqual(
+                    [p.tool_name for p in snapshot.probes], ["parallel_probe_b"]
+                )
+                self.assertEqual(len(planning_model.requests), 1)
+                self.assertIn(
+                    "Run only probe B", planning_model.requests[0].messages[1].content
+                )
+            finally:
+                controller.close()
+        self.assertEqual(planning_model.stops, 1)
+
+    def test_planning_requires_explicit_model_and_trajectory(self) -> None:
+        with self.assertRaises(ValueError):
+            RuntimeConfig(dynamic_planning=True, trajectory_enabled=False)
+        with self.assertRaisesRegex(ValueError, "planner_factory"):
+            StreamlitRuntimeController(RuntimeConfig(dynamic_planning=True))
