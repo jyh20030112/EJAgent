@@ -128,16 +128,36 @@ harness = AgentHarness(
 ## Evaluate Task Results
 
 Use `ejagent.evaluation` to bind an immutable `EvaluationPlan` to each Run,
-read versioned evidence, and run deterministic acceptance checks. Built-in
-file and probe sources share `GoalEvaluator`; `EvaluationMonitor` feeds verified
-results into trajectory analysis and optional model Context. Missing evidence
-remains unknown, and changed evidence invalidates previous conclusions.
+read versioned evidence, and evaluate acceptance criteria. `GoalEvaluator`
+combines deterministic `Verifier` checks with an optional `ModelJudge` for
+explicit semantic criteria. A semantic criterion can declare `guard_method`:
+the deterministic guard must return `pass` before the LLM is called. Both paths
+produce a shared evaluation report; deterministic checks make no model requests.
 
-Deterministic checks make no model requests. Add an optional `ModelJudge` for
-explicit semantic criteria, and opt into `CompletionPolicy(CompletionMode.ENFORCE)`
-to retry rejected completions within the same Run. Observation remains the default.
+The library implements evidence collection, verification orchestration, result
+validation, and reporting. Built-in sources cover files, workspaces, commands,
+and probes. The host configures sources, registers verification capabilities,
+and supplies domain-specific rules where needed. `EvaluationMonitor` connects
+reports to trajectory analysis. Missing evidence remains unknown, and changed
+evidence invalidates previous conclusions.
+
+Opt into `CompletionPolicy(CompletionMode.ENFORCE)` to retry rejected completions
+within the same Run. Observation remains the default.
 See the [evaluation guide](docs/evaluation.md) for Harness wiring, custom checks,
 report logs, and the credential-free `examples/evaluate_artifact.py` example.
+
+## Keep State Visible at Every Decision
+
+When configured through `EvaluationMonitor.context_pipeline()`, the trajectory
+pipeline supplies checkpoint state at each model decision: current facts,
+requirement and constraint verdicts, and progress. Suspected cycles suppress
+only the warning; state remains visible. Actionable events such as confirmed
+cycles or failed completion audits add optional `feedback`.
+
+Missing or incomplete observations produce explicit unavailable status without
+replaying old success or coverage. Projection itself performs no extra evaluation
+or Planner call, and its instructions remain outside committed conversation
+history. See the [v2 context schema and migration notes](docs/trajectory-context-projection.md).
 
 ## Generate Tasks and Revise Execution Plans
 
@@ -204,13 +224,17 @@ followed by verified completion in the same Run (three demo turns).
 | Long-history summarization       | `ContextCompactor` |
 | Session persistence              | `SessionStore`     |
 | Logging, tracing, or metrics     | `RunObserver`      |
+| Task and initial plan generation | `TaskPlanner`      |
+| Evaluation evidence collection  | `EvidenceSource`   |
+| Deterministic acceptance rules   | `Verifier`         |
 | Online trajectory observation   | `TrajectoryMonitor` in `ejagent.kernel` |
 
 These are narrow, provider-neutral contracts. Implement only the part your
 application needs, then compose it through `AgentHarness`. The built-in online
 low-level monitor and trajectory Context adapter live in the internal
 `ejagent._trajectory` package. Applications can use the public
-`ejagent.evaluation` module for deterministic criteria, sources, and checks.
+`ejagent.evaluation` module for evidence sources, deterministic checks, and
+semantic judging through `ModelJudge`.
 
 ## Built-in Capabilities
 
@@ -223,7 +247,13 @@ low-level monitor and trajectory Context adapter live in the internal
 - Cooperative cancellation, live steering, and FIFO follow-ups
 - Structured audit records and normalized usage accounting
 - Revision-based, idempotent session commits with cross-process file locking
-- Optional online trajectory assessment and decision-specific Context feedback
+- Deterministic and optional LLM acceptance evaluation with shared reports
+- Optional online trajectory assessment with per-decision state and optional feedback
+
+Native user input currently supports text only: `run(task: str)`,
+`follow_up(task: str)`, and `UserMessage.content` accept strings. Image and mixed
+text/image messages are not implemented; image URLs or Base64 strings remain
+text rather than visual model input.
 
 Each `AgentHarness` currently manages one logical agent. Multi-agent coordination
 and arbitrary mid-Run pause/resume are not implemented. Trajectory-based Action

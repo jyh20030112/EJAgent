@@ -121,13 +121,28 @@ harness = AgentHarness(
 ## 评估任务结果
 
 `ejagent.evaluation` 支持为每个 Run 绑定不可变的 `EvaluationPlan`，读取带版本的证据，
-并执行确定性验收检查。文件产物和探针证据共用 `GoalEvaluator`；`EvaluationMonitor`
-将结果接入轨迹分析和临时模型 Context。缺少证据时返回未知，证据变化后使旧结论失效。
+并评估验收项。`GoalEvaluator` 统一编排确定性 `Verifier` 与可选的 `ModelJudge`，
+后者处理显式声明的语义验收项。语义项可以配置 `guard_method`：确定性前置检查返回
+`pass` 后才调用 LLM。两条路径生成统一的评估报告，确定性检查不发起模型请求。
 
-确定性检查不调用大模型；可选的 `ModelJudge` 处理显式语义项目，独立的
-`CompletionPolicy` 支持拦截未通过的完成请求并在当前 Run 内重试。默认保持观察模式。
+库负责证据采集、验证编排、结果校验和报告，内置文件、工作区、命令和探针证据源。
+宿主负责配置证据源、注册验证能力，并按需提供业务专用规则。`EvaluationMonitor`
+将报告接入轨迹分析。缺少证据时返回未知，证据变化后使旧结论失效。
+
+显式配置 `CompletionPolicy(CompletionMode.ENFORCE)` 可拦截未通过的完成请求，
+并在当前 Run 内重试。默认保持观察模式。
 接入方法、自定义检查、评估日志
 及无需凭证的 `examples/evaluate_artifact.py` 示例见[评估模块指南](docs/evaluation.md)。
+
+## 每轮决策都能看到状态
+
+通过 `EvaluationMonitor.context_pipeline()` 配置轨迹上下文管道后，每次模型决策都会
+收到 checkpoint 状态，包括当前事实、需求与约束的验收结果，以及进展。疑似循环仅隐藏
+警告，状态仍然可见；确认循环、完成验收失败等需要行动的事件才附加可选的 `feedback`。
+
+观察缺失或不完整时，明确标记状态不可用，不沿用旧的成功结论或覆盖率。上下文投影本身
+不增加评估或 Planner 调用，临时指令也不写入已提交的对话历史。字段结构与迁移说明见
+[v2 轨迹上下文文档](docs/trajectory-context-projection.md)。
 
 ## 动态任务与执行计划
 
@@ -185,11 +200,14 @@ Judge 替身；真实 Provider 模式会发起独立模型请求。界面展示�
 | 长历史摘要方式       | `ContextCompactor` |
 | Session 持久化       | `SessionStore`     |
 | 日志、追踪或指标     | `RunObserver`      |
+| 任务与初始计划生成   | `TaskPlanner`      |
+| 评估证据采集         | `EvidenceSource`   |
+| 确定性验收规则       | `Verifier`         |
 | 在线轨迹观察         | `ejagent.kernel` 中的 `TrajectoryMonitor` |
 
 这些接口保持精简并且不绑定 Provider，通过 `AgentHarness` 组合应用需要的能力。
 底层在线监控器和轨迹上下文适配器位于内部包 `ejagent._trajectory`。应用可以通过
-公开的 `ejagent.evaluation` 模块配置确定性验收标准、证据来源和验证方法。
+公开的 `ejagent.evaluation` 模块配置证据来源、确定性检查和 `ModelJudge` 语义评估。
 
 ## 内置能力
 
@@ -202,7 +220,12 @@ Judge 替身；真实 Provider 模式会发起独立模型请求。界面展示�
 - 协作式取消、实时 Steering 和 FIFO Follow-up
 - 结构化 Audit 与统一的 token 用量统计
 - 基于 Revision、支持幂等和跨进程文件锁的 Session 提交
-- 可选的在线轨迹评估与面向下一次决策的上下文反馈
+- 确定性与可选 LLM 验收评估，统一生成报告
+- 可选的在线轨迹评估，每轮提供状态并按需附加反馈
+
+当前原生用户输入仅支持文本：`run(task: str)`、`follow_up(task: str)` 和
+`UserMessage.content` 均接收字符串。尚未实现图片或图文混合消息；图片 URL 或 Base64
+字符串会作为文本传递，不会自动成为模型的视觉输入。
 
 当前每个 `AgentHarness` 管理一个逻辑 Agent，尚未实现多 Agent 协调和任意时刻的
 mid-Run 暂停／恢复。已支持执行者根据反馈提出执行计划更新；自动拒绝动作和强制
