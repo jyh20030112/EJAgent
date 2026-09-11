@@ -101,14 +101,21 @@ The model loop is:
 query → planner → validated task and initial execution plan
   → baseline checkpoint → actor context
   → actor actions → completed tool batch → refreshed evaluation
-  → latest feedback and plan → actor may call update_plan → next action
+  → checkpoint state, optional feedback, and plan → actor may call update_plan
+  → next action
   → proposed completion → independent acceptance gate
 ```
 
 The plan is projected in a temporary `planning` instruction after the configured
 Context pipeline. It contains the task, acceptance conditions, unknowns, current
-plan, and latest checkpoint ID. Trajectory feedback also exposes the current
-plan in `revisable_plan`. These instructions do not become committed conversation
+plan, and latest checkpoint ID. The configured trajectory pipeline also exposes
+the current plan in `revisable_plan`. Its v2 projection sends checkpoint state
+at every decision, including suspected cycles and plan-only updates; only
+actionable events add `feedback`. If the exact Run/turn observation is missing
+or incomplete, it explicitly marks state unavailable without replaying old
+success or progress. Projection itself performs no extra evaluation or Planner
+call. See [trajectory context](trajectory-context-projection.md) for the schema
+and availability rules. These instructions do not become committed conversation
 messages. Historical tool messages can contain older proposals, but the current
 projection identifies the authoritative version.
 

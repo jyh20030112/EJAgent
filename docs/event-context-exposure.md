@@ -146,7 +146,9 @@ silently conflated.
 ## Event-context exposure matrix
 
 The matrix describes what a subsequent model call may see. It does not require
-every event to cause a model call.
+every event to cause a model call. The configured trajectory pipeline projects
+checkpoint state independently of optional intervention feedback; see the
+[v2 context policy](trajectory-context-projection.md).
 
 | Event | Recorder stores | Evaluator receives | Next model projection | Notes |
 | --- | --- | --- | --- | --- |
@@ -158,7 +160,7 @@ every event to cause a model call.
 | `StateCheckpointed` | State, projection version, fingerprint, causal Actions | previous and current State | current State summary when decision-relevant | Fingerprint stays controller-facing |
 | `VerificationCompleted` | verifier command/configuration and raw Evidence | scoped verifier Facts | Requirement/Constraint changes and failing evidence | Evidence scope must match any completion claim |
 | `ProgressEvaluated` | current/best snapshots, delta, cost window, assessment source | all assessment inputs | concise Task/Epistemic Progress, Regression, blockers | One zero Delta is not automatically stagnation |
-| `CycleSuspected` | candidate period and matching fingerprints | underlying Facts and progress window | nothing or a low-priority warning | Suspicion should first trigger more observation if Facts are weak |
+| `CycleSuspected` | candidate period and matching fingerprints | underlying Facts and progress window | current Facts, verdicts, and progress; no suspicion warning | Suspicion stays controller-only and does not suppress state |
 | `CycleConfirmed` | compared checkpoints, repeated path, exhausted evidence, costs | confirmed recurrence inputs | Goal anchor, equivalent States, repeated Actions, no-progress evidence, replan request | Explain evidence, not only “loop detected” |
 | `ConstraintViolated` | violated Constraint and authoritative Evidence | violation and affected Requirements | high-priority violation, impact, required recovery boundary | A hard violation may block before another model call |
 | `ExternalStateChanged` | source event and invalidated Facts | refreshed State inputs | changed current Facts and invalidations | Conversation memory cannot override the external change |

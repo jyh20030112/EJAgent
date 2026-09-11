@@ -148,68 +148,115 @@ class ProjectedTrajectoryContext:
     """Disposable instruction plus inspectable projection metadata."""
 
     instruction: TransientInstruction
-    event: TrajectoryContextEventKind
-    checkpoint_id: str
+    event: TrajectoryContextEventKind | None
+    checkpoint_id: str | None
 
 
 class TrajectoryContextProjector:
-    """Render current Facts and one Assessment without exposing detector internals."""
+    """Project checkpoint state independently of optional intervention feedback."""
 
-    SCHEMA = "ejagent.trajectory-context.v1"
+    SCHEMA = "ejagent.trajectory-context.v2"
+    _ALERT_EVENTS = frozenset(
+        {
+            TrajectoryContextEventKind.CYCLE_CONFIRMED,
+            TrajectoryContextEventKind.CONSTRAINT_VIOLATED,
+            TrajectoryContextEventKind.EXTERNAL_STATE_CHANGED,
+            TrajectoryContextEventKind.COMPLETION_AUDIT_FAILED,
+            TrajectoryContextEventKind.EVALUATION_UNAVAILABLE,
+        }
+    )
 
-    def project(
-        self,
-        frame: TrajectoryContextFrame,
-    ) -> ProjectedTrajectoryContext | None:
+    def project(self, frame: TrajectoryContextFrame) -> ProjectedTrajectoryContext:
+        """Always project observed state; only actionable events add feedback."""
         if not isinstance(frame, TrajectoryContextFrame):
             raise TypeError("frame must be a TrajectoryContextFrame")
-        if frame.event.kind is TrajectoryContextEventKind.CYCLE_SUSPECTED:
-            return None
         if frame.event.kind is TrajectoryContextEventKind.EVALUATION_UNAVAILABLE:
             return self._project_unavailable(frame)
         self._validate_facts(frame.checkpoint)
         self._validate_event(frame)
+        event = frame.event.kind if frame.event.kind in self._ALERT_EVENTS else None
         payload = {
-            "trajectory_context": {
-                "schema": self.SCHEMA,
-                "event": frame.event.kind.value,
-                "event_id": frame.event.event_id,
-                "goal_anchor": frame.goal,
-                "checkpoint": frame.checkpoint.checkpoint_id,
-                "current_facts": [
-                    self._current_fact_payload(item)
-                    for item in frame.checkpoint.current_facts
-                ],
-                "invalidated_facts": [
-                    self._invalidated_fact_payload(item)
-                    for item in frame.checkpoint.invalidated_facts
-                    if item.fact_id in frame.event.invalidated_fact_ids
-                ],
-                "requirements": dict(frame.checkpoint.requirements),
-                "constraints": dict(frame.checkpoint.constraints),
-                "revisable_plan": frame.current_plan,
-                "refuted_hypotheses": list(frame.refuted_hypotheses),
-                "progress": self._progress_payload(frame.progress),
-                "event_evidence_refs": list(frame.event.evidence_refs),
-                "affected_items": list(frame.event.affected_items),
-                "recent_causal_actions": list(frame.event.causal_actions),
-                "missing_evidence": list(frame.event.missing_evidence),
-                "instruction": self._instruction(frame.event.kind),
-            }
+            "schema": self.SCHEMA,
+            "run_id": frame.run_id,
+            "for_turn": frame.turn,
+            "state_status": "available",
+            "goal_anchor": frame.goal,
+            "checkpoint": frame.checkpoint.checkpoint_id,
+            "current_facts": [
+                self._current_fact_payload(item)
+                for item in frame.checkpoint.current_facts
+            ],
+            "invalidated_facts": [
+                self._invalidated_fact_payload(item)
+                for item in frame.checkpoint.invalidated_facts
+            ],
+            "requirements": dict(frame.checkpoint.requirements),
+            "constraints": dict(frame.checkpoint.constraints),
+            "revisable_plan": frame.current_plan,
+            "refuted_hypotheses": list(frame.refuted_hypotheses),
+            "progress": self._progress_payload(frame.progress),
+            "missing_evidence": list(frame.event.missing_evidence),
+            "feedback": self._feedback(frame) if event is not None else None,
         }
-        content = json.dumps(
-            payload,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
+        return self._render(payload, event, frame.checkpoint.checkpoint_id)
+
+    def _feedback(self, frame: TrajectoryContextFrame) -> dict[str, object]:
+        return {
+            "event": frame.event.kind.value,
+            "event_id": frame.event.event_id,
+            "event_evidence_refs": list(frame.event.evidence_refs),
+            "affected_items": list(frame.event.affected_items),
+            "recent_causal_actions": list(frame.event.causal_actions),
+            "instruction": self._instruction(frame.event.kind),
+        }
+
+    @staticmethod
+    def _render(
+        payload: dict[str, object],
+        event: TrajectoryContextEventKind | None,
+        checkpoint_id: str | None,
+    ) -> ProjectedTrajectoryContext:
         return ProjectedTrajectoryContext(
-            instruction=TransientInstruction(
-                content,
-                f"trajectory:{frame.event.kind.value}",
+            TransientInstruction(
+                json.dumps(
+                    {"trajectory_context": payload},
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                f"trajectory:{event.value}"
+                if event is not None
+                else "trajectory:state",
             ),
-            event=frame.event.kind,
-            checkpoint_id=frame.checkpoint.checkpoint_id,
+            event,
+            checkpoint_id,
+        )
+
+    def project_missing(self, request: ContextRequest) -> ProjectedTrajectoryContext:
+        """Do not replay an older observation as a current decision's assessment."""
+        event = TrajectoryContextEventKind.EVALUATION_UNAVAILABLE
+        return self._render(
+            {
+                "schema": self.SCHEMA,
+                "run_id": request.run_id,
+                "for_turn": request.turn,
+                "state_status": "unavailable",
+                "checkpoint": None,
+                "missing_evidence": [
+                    "No checkpoint observation is available for this decision"
+                ],
+                "feedback": {
+                    "event": event.value,
+                    "instruction": (
+                        "No checkpoint observation is available for this decision. "
+                        "Earlier context does not establish current facts or "
+                        "completion status; obtain fresh verification before "
+                        "claiming completion."
+                    ),
+                },
+            },
+            event,
+            None,
         )
 
     def _project_unavailable(
@@ -224,28 +271,21 @@ class TrajectoryContextProjector:
             for name in frame.event.affected_items
         ):
             raise ValueError("unavailable affected items must have unknown verdicts")
-        payload = {
-            "trajectory_context": {
+        return self._render(
+            {
                 "schema": self.SCHEMA,
-                "event": frame.event.kind.value,
-                "event_id": frame.event.event_id,
+                "run_id": frame.run_id,
+                "for_turn": frame.turn,
+                "state_status": "unavailable",
                 "goal_anchor": frame.goal,
                 "checkpoint": frame.checkpoint.checkpoint_id,
-                "affected_items": list(frame.event.affected_items),
                 "missing_evidence": list(frame.event.missing_evidence),
                 "invalidated_facts": [
                     self._invalidated_fact_payload(item)
                     for item in frame.checkpoint.invalidated_facts
-                    if item.fact_id in frame.event.invalidated_fact_ids
                 ],
-                "instruction": "Evaluation is incomplete or conflicting. Gather the missing evidence and recheck affected items. Discard invalidated conclusions; no current facts or completion score are asserted here.",
-            }
-        }
-        return ProjectedTrajectoryContext(
-            TransientInstruction(
-                json.dumps(payload, ensure_ascii=False, sort_keys=True),
-                "trajectory:evaluation_unavailable",
-            ),
+                "feedback": self._feedback(frame),
+            },
             frame.event.kind,
             frame.checkpoint.checkpoint_id,
         )
@@ -356,12 +396,10 @@ class TrajectoryContextProjector:
     @staticmethod
     def _instruction(kind: TrajectoryContextEventKind) -> str:
         instructions = {
-            TrajectoryContextEventKind.FACTS_UPDATED: (
-                "Use the current source-attributed Facts for the next decision; do not "
-                "treat invalidated conversation history as current truth."
-            ),
-            TrajectoryContextEventKind.PROGRESS_EVALUATED: (
-                "Use verified Task and Epistemic Progress to choose the next Action."
+            TrajectoryContextEventKind.EVALUATION_UNAVAILABLE: (
+                "Evaluation is incomplete or conflicting. Gather the missing "
+                "evidence and recheck affected items. Discard invalidated "
+                "conclusions; no current facts or completion score are asserted here."
             ),
             TrajectoryContextEventKind.CYCLE_CONFIRMED: (
                 "Replan from the Goal and current Facts. Do not repeat the exhausted "
@@ -445,24 +483,21 @@ class TrajectoryContextPipeline(ContextPipeline):
                 raise ValueError(
                     "trajectory frame must match ContextRequest run and turn"
                 )
-            projection = None if frame is None else self._projector.project(frame)
+            projection = (
+                self._projector.project_missing(request)
+                if frame is None
+                else self._projector.project(frame)
+            )
         except (TypeError, ValueError) as exc:
             raise ContextProtocolError(str(exc)) from exc
         metadata: dict[str, JsonValue] = {
             **view.metadata,
-            "trajectory_context_visible": projection is not None,
+            "trajectory_context_visible": True,
+            "trajectory_feedback_visible": projection.event is not None,
         }
         if frame is not None:
             metadata["trajectory_event"] = frame.event.kind.value
             metadata["trajectory_checkpoint"] = frame.checkpoint.checkpoint_id
-        if projection is None:
-            return ContextView(
-                run_id=view.run_id,
-                source_revision=view.source_revision,
-                turn=view.turn,
-                messages=view.messages,
-                metadata=metadata,
-            )
         return ContextView(
             run_id=view.run_id,
             source_revision=view.source_revision,

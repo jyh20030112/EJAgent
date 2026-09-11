@@ -12,6 +12,7 @@ from ejagent._trajectory import (
     ProgressSnapshot,
     ProgressStatus,
     TrajectoryCheckpoint,
+    TrajectoryContextBuffer,
     TrajectoryContextEvent,
     TrajectoryContextEventKind,
     TrajectoryContextFrame,
@@ -188,14 +189,78 @@ class TrajectoryContextPipelineTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await pipeline.shutdown()
 
-    async def test_cycle_suspicion_remains_controller_only(self) -> None:
+    async def test_cycle_suspicion_keeps_state_but_remains_controller_only(
+        self,
+    ) -> None:
         view = await self._build(_frame(TrajectoryContextEventKind.CYCLE_SUSPECTED))
 
-        self.assertFalse(view.metadata["trajectory_context_visible"])
+        self.assertTrue(view.metadata["trajectory_context_visible"])
+        self.assertFalse(view.metadata["trajectory_feedback_visible"])
         self.assertEqual(view.metadata["trajectory_event"], "cycle_suspected")
-        self.assertFalse(
-            any(isinstance(message, TransientInstruction) for message in view.messages)
-        )
+        instruction = view.messages[-1]
+        self.assertIsInstance(instruction, TransientInstruction)
+        self.assertEqual(instruction.source, "trajectory:state")
+        payload = json.loads(instruction.content)["trajectory_context"]
+        self.assertEqual(payload["schema"], "ejagent.trajectory-context.v2")
+        self.assertEqual(payload["state_status"], "available")
+        self.assertIsNone(payload["feedback"])
+        self.assertEqual(payload["checkpoint"], "cp2")
+        self.assertEqual(payload["for_turn"], 2)
+        self.assertEqual(payload["requirements"], {"R-route": False, "R-health": True})
+        self.assertEqual(payload["progress"]["current_requirement_coverage"], 0.5)
+        self.assertEqual(payload["current_facts"][0]["observed_at"], NOW.isoformat())
+        self.assertEqual(payload["invalidated_facts"][0]["fact_id"], "route-green-old")
+        self.assertNotIn("cycle_suspected", instruction.content)
+        self.assertNotIn("Replan", instruction.content)
+
+    async def test_normal_observations_provide_state_without_intervention(self) -> None:
+        for kind in (
+            TrajectoryContextEventKind.FACTS_UPDATED,
+            TrajectoryContextEventKind.PROGRESS_EVALUATED,
+        ):
+            with self.subTest(kind=kind):
+                view = await self._build(_frame(kind))
+                state = json.loads(view.messages[-1].content)["trajectory_context"]
+                self.assertEqual(state["current_facts"][0]["value"], "blue")
+                self.assertIsNone(state["feedback"])
+                self.assertFalse(view.metadata["trajectory_feedback_visible"])
+
+    async def test_missing_observation_does_not_invent_state_or_success(self) -> None:
+        view = await self._build(None)
+        state = json.loads(view.messages[-1].content)["trajectory_context"]
+        self.assertEqual(state["state_status"], "unavailable")
+        self.assertIsNone(state["checkpoint"])
+        self.assertTrue(state["missing_evidence"])
+        self.assertEqual(state["feedback"]["event"], "evaluation_unavailable")
+        for name in ("current_facts", "requirements", "constraints", "progress"):
+            self.assertNotIn(name, state)
+
+    async def test_snapshot_keeps_identity_and_cannot_leak_into_other_decisions(
+        self,
+    ) -> None:
+        buffer = TrajectoryContextBuffer()
+        frame = _frame(TrajectoryContextEventKind.CYCLE_SUSPECTED)
+        buffer.publish(frame)
+        pipeline = TrajectoryContextPipeline(source=buffer)
+        await pipeline.start()
+        try:
+            first = await pipeline.build(_request(), cancellation=CancellationToken())
+            again = await pipeline.build(_request(), cancellation=CancellationToken())
+            self.assertEqual(first, again)
+            for request in (_request(3), replace(_request(), run_id="other-run")):
+                view = await pipeline.build(request, cancellation=CancellationToken())
+                state = json.loads(view.messages[-1].content)["trajectory_context"]
+                self.assertEqual(state["state_status"], "unavailable")
+                self.assertIsNone(state["checkpoint"])
+                self.assertNotIn("current_facts", state)
+            buffer.close_run("context-run")
+            closed = await pipeline.build(_request(), cancellation=CancellationToken())
+            self.assertNotIn(
+                "current_facts",
+                json.loads(closed.messages[-1].content)["trajectory_context"],
+            )
+        finally:
+            await pipeline.shutdown()
 
     async def test_confirmed_cycle_projects_current_truth_and_provenance(self) -> None:
         view = await self._build(_frame(TrajectoryContextEventKind.CYCLE_CONFIRMED))
@@ -204,7 +269,7 @@ class TrajectoryContextPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(instruction, TransientInstruction)
         assert isinstance(instruction, TransientInstruction)
         payload = json.loads(instruction.content)["trajectory_context"]
-        self.assertEqual(payload["event"], "cycle_confirmed")
+        self.assertEqual(payload["feedback"]["event"], "cycle_confirmed")
         self.assertEqual(
             payload["goal_anchor"],
             _frame(TrajectoryContextEventKind.CYCLE_CONFIRMED).goal,
@@ -214,10 +279,10 @@ class TrajectoryContextPipelineTests(unittest.IsolatedAsyncioTestCase):
             payload["current_facts"][0]["evidence_ref"],
             "deployment://evidence/route-blue",
         )
-        self.assertEqual(payload["invalidated_facts"], [])
+        self.assertEqual(payload["invalidated_facts"][0]["fact_id"], "route-green-old")
         self.assertNotIn("controller-only-fingerprint", instruction.content)
         self.assertNotIn('"value":"green"', instruction.content)
-        self.assertIn("Replan from the Goal", payload["instruction"])
+        self.assertIn("Replan from the Goal", payload["feedback"]["instruction"])
 
     async def test_nested_fact_values_are_projected_as_json(self) -> None:
         value: JsonValue = {"routes": [{"color": "blue", "healthy": True}]}
@@ -255,7 +320,7 @@ class TrajectoryContextPipelineTests(unittest.IsolatedAsyncioTestCase):
                 }
             ],
         )
-        self.assertIn("Discard beliefs", payload["instruction"])
+        self.assertIn("Discard beliefs", payload["feedback"]["instruction"])
 
     async def test_failed_completion_audit_explicitly_continues_same_run(self) -> None:
         view = await self._build(
@@ -265,9 +330,9 @@ class TrajectoryContextPipelineTests(unittest.IsolatedAsyncioTestCase):
         instruction = view.messages[-1]
         assert isinstance(instruction, TransientInstruction)
         payload = json.loads(instruction.content)["trajectory_context"]
-        self.assertEqual(payload["affected_items"], ["R-route"])
+        self.assertEqual(payload["feedback"]["affected_items"], ["R-route"])
         self.assertEqual(payload["missing_evidence"], ["production route verification"])
-        self.assertIn("Continue this Run", payload["instruction"])
+        self.assertIn("Continue this Run", payload["feedback"]["instruction"])
 
     async def test_constraint_violation_projects_a_recovery_boundary(self) -> None:
         view = await self._build(_frame(TrajectoryContextEventKind.CONSTRAINT_VIOLATED))
@@ -276,8 +341,10 @@ class TrajectoryContextPipelineTests(unittest.IsolatedAsyncioTestCase):
         assert isinstance(instruction, TransientInstruction)
         payload = json.loads(instruction.content)["trajectory_context"]
         self.assertEqual(payload["constraints"], {"C-availability": False})
-        self.assertEqual(payload["affected_items"], ["C-availability"])
-        self.assertIn("Recover the violated Constraint", payload["instruction"])
+        self.assertEqual(payload["feedback"]["affected_items"], ["C-availability"])
+        self.assertIn(
+            "Recover the violated Constraint", payload["feedback"]["instruction"]
+        )
 
     async def test_incomplete_fact_capture_fails_closed(self) -> None:
         with self.assertRaisesRegex(ContextProtocolError, "complete Fact capture"):
@@ -352,12 +419,15 @@ class TrajectoryContextRuntimeTimingTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(outcome.result.succeeded)
         self.assertEqual(len(model.requests), 2)
-        self.assertFalse(
-            any(
-                isinstance(message, TransientInstruction)
-                for message in model.requests[0].messages
-            )
+        missing = next(
+            message
+            for message in model.requests[0].messages
+            if isinstance(message, TransientInstruction)
         )
+        first_state = json.loads(missing.content)["trajectory_context"]
+        self.assertEqual(first_state["state_status"], "unavailable")
+        self.assertIsNone(first_state["checkpoint"])
+        self.assertNotIn("cycle_confirmed", missing.content)
         projected = [
             message
             for message in model.requests[1].messages

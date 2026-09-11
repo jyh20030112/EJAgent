@@ -1,20 +1,21 @@
-# Harness Trajectory Context Feedback
+# Harness Trajectory State and Feedback
 
 ## Status
 
 The Harness supports internal, opt-in trajectory Context projection under
 `ejagent._trajectory`. A host composes `AgentHarness` with a monitor and
-`TrajectoryContextPipeline` to provide decision-specific feedback. The
+`TrajectoryContextPipeline` to provide checkpoint state and optional feedback
+at each decision. The
 projection is not a stable top-level API and gives no trajectory code authority
 to admit Actions or terminate Runs. The Streamlit example enables this
 composition by default; the library does not.
 
 The entry gates are executable in
 [`phase2_evidence.py`](../experiments/trajectory/phase2_evidence.py), with the
-durable result in
+historical v1 result in
 [`2026-09-01-phase2-summary.json`](../experiments/trajectory/results/2026-09-01-phase2-summary.json).
-The reproduced JSON is 3,271 bytes with SHA-256
-`7d75fdbd5f7c08740186de6909170c27cd1ff9698f28efb1ef36b2ecc9964d05`.
+That artifact records the former event-gated policy. Running the script now
+checks the v2 state/feedback policy without rewriting the historical result.
 
 ## Module and Interface
 
@@ -30,12 +31,12 @@ Decision Boundary:
 - the stable Goal anchor;
 - one explicit `TrajectoryCheckpoint`;
 - its `ProgressSnapshot`;
-- one `TrajectoryContextEvent` explaining why the next decision should—or
-  should not—receive additional Context.
+- one `TrajectoryContextEvent` determining whether the state needs an
+  additional intervention instruction.
 
 `TrajectoryContextPipeline` is the small adapter at the existing
 `ContextPipeline` seam. It builds the host's base Context first, obtains a
-frame for the current `run_id` and `turn`, and appends at most one disposable
+frame for the current `run_id` and `turn`, and appends one disposable
 `TransientInstruction`:
 
 ```text
@@ -43,7 +44,7 @@ RuntimeKernel._build_context
   -> host-selected base ContextPipeline
   -> host TrajectoryContextSource(ContextRequest)
   -> TrajectoryContextProjector.project(frame)
-  -> optional TransientInstruction
+  -> TransientInstruction (observed state or explicit unavailable status)
   -> next model request
 ```
 
@@ -75,23 +76,49 @@ source, observation time, checkpoint, Evidence reference, freshness condition,
 and authority. Complete capture is required for model-facing projection.
 State fingerprints remain controller-only.
 
-## Event visibility
+## State and feedback visibility
 
-The default policy is deliberately asymmetric:
+State visibility is independent of intervention visibility. A suspected cycle
+does not hide current Facts, requirement/constraint verdicts, progress, or the
+revisable plan. The suspicion remains in controller assessment and audit.
 
-| Event | Visible to next model call | Projected consequence |
+| Event | State visible | Optional feedback |
 | --- | --- | --- |
-| `FactsUpdated` | yes | current Facts and scoped Evidence |
-| `ProgressEvaluated` | yes | Task/Epistemic Progress and Regression |
-| `CycleSuspected` | no | gather stronger Evidence first |
-| `CycleConfirmed` | yes | Goal anchor, current Facts, exhausted Action path, replan request |
+| `FactsUpdated` | yes | none |
+| `ProgressEvaluated` | yes | none |
+| `CycleSuspected` | yes | none; suspicion stays controller-only |
+| `CycleConfirmed` | yes | exhausted Action path and replan request |
 | `ConstraintViolated` | yes | violated item and required recovery boundary |
 | `ExternalStateChanged` | yes | invalidated Facts and refreshed current State |
 | `CompletionAuditFailed` | yes | unmet items, missing Evidence, continue-current-Run instruction |
+| `EvaluationUnavailable` | explicit unavailable status | gather missing Evidence; no current success claim |
 
-Events are exposed at the next Decision Boundary, not when they are merely
-recorded. Tests run a real two-turn `RuntimeKernel` and verify that a frame for
-turn 2 is absent from turn 1 and visible exactly once on turn 2.
+Observations are exposed at the next Decision Boundary. A frame for turn 2
+cannot be used for turn 1, turn 3, or another Run. Missing frames produce
+`state_status: "unavailable"` with a null checkpoint. Incomplete evaluation also
+produces unavailable status, retaining its checkpoint and invalidation metadata.
+Neither case supplies current Facts, verdicts, or a completion score.
+
+## Context schema v2
+
+The `trajectory_context` envelope now uses `ejagent.trajectory-context.v2`.
+Current state fields remain at the envelope level, including `goal_anchor`,
+`checkpoint`, `current_facts`, `invalidated_facts`, `requirements`, `constraints`,
+`revisable_plan`, and `progress`. `run_id`, `for_turn`, and `state_status` identify
+the projection's decision and availability. All invalidated Facts from the
+checkpoint are included as metadata, without their old values.
+
+The v1 fields `event`, `event_id`, `event_evidence_refs`, `affected_items`,
+`recent_causal_actions`, and `instruction` move into optional `feedback`.
+Ordinary state and suspected cycles use `feedback: null` and instruction source
+`trajectory:state`; interventions retain `trajectory:<event>` sources. A missing
+observation has no event ID or causal evidence and supplies only its unavailable
+event and instruction. Consumers must check the schema and nullable feedback.
+
+Pipeline metadata separates `trajectory_context_visible` from
+`trajectory_feedback_visible`. When a frame exists, `trajectory_event` retains
+the actual controller event even when its warning is hidden from the Actor.
+Projections remain transient; they do not enter committed conversation history.
 
 ## Phase-2 entry gates
 
@@ -126,7 +153,14 @@ enforcement by itself.
 
 `TrajectoryContextBuffer` keys frames by Run and turn. Reads do not consume a
 frame, so rebuilding Context for the same turn returns the same staged input;
-`close_run()` removes its frames. Terminal completion advice may be staged for
-a next turn that never occurs, because the current Kernel does not enforce
-completion review. Applications should distinguish assessments from instructions
-actually included in a model Context, as the Streamlit example does.
+`close_run()` removes its frames. Rebuilding a turn preserves the checkpoint and
+Fact observation times; projection does not run an evaluator, refresh evidence,
+or call a Planner. Hosts remain responsible for capturing decision-boundary
+observations rather than treating an older successful evaluation as current.
+
+Completion enforcement is configured separately through `CompletionPolicy`.
+When approval is required, a rejected completion continues the same Run while
+budget remains. Advisory-only assessments can target a next turn that never
+occurs. Applications should distinguish recorded assessments from instructions
+actually delivered to the model, as the Streamlit example does. Context v2
+does not change cycle thresholds or acceptance rules.

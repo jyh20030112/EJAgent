@@ -632,7 +632,9 @@ def _render_trajectory(
     st.subheader("Trajectory instructions in model context")
     st.caption(
         "These are the actual instructions included in built model contexts. "
-        "Suspected cycles are withheld. When completion approval is required, "
+        "Each decision receives checkpoint state or an explicit unavailable status. "
+        "Suspected-cycle warnings are withheld while state remains visible. "
+        "When completion approval is required, "
         "failed audits feed the next model call in the same Run."
     )
     for delivery in snapshot.trajectory_contexts:

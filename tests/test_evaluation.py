@@ -534,7 +534,7 @@ class TestEvaluationHarness(unittest.IsolatedAsyncioTestCase):
         receipt = await monitor.capture(signal(plan(), 1), cancellation=self.token)
         self.assertEqual(receipt.verdict, "insufficient_evidence")
         partial = (await self.projected(monitor, turn=2))[0]
-        self.assertEqual(partial["event"], "evaluation_unavailable")
+        self.assertEqual(partial["feedback"]["event"], "evaluation_unavailable")
         self.assertNotIn("current_facts", partial)
         self.assertNotIn("progress", partial)
         self.assertEqual(partial["missing_evidence"], ["state"])
@@ -546,7 +546,10 @@ class TestEvaluationHarness(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(receipt.completion_allowed)
         monitor.close_run("run")
-        self.assertEqual(await self.projected(monitor, turn=3), [])
+        closed_state = (await self.projected(monitor, turn=3))[0]
+        self.assertEqual(closed_state["state_status"], "unavailable")
+        self.assertIsNone(closed_state["checkpoint"])
+        self.assertNotIn("progress", closed_state)
         self.assertEqual(evaluator.active_run_ids, ())
 
     async def test_duplicate_reads_still_allow_cycle_detection(self) -> None:
@@ -571,7 +574,7 @@ class TestEvaluationHarness(unittest.IsolatedAsyncioTestCase):
             receipt = await monitor.capture(current, cancellation=self.token)
         self.assertEqual(receipt.verdict, "non_progress_cycle")
         frame = (await self.projected(monitor, turn=5))[0]
-        self.assertEqual(frame["event"], "cycle_confirmed")
+        self.assertEqual(frame["feedback"]["event"], "cycle_confirmed")
         monitor.close_run("run")
 
     async def test_constraint_regression_uses_existing_progress_calculation(
@@ -594,7 +597,7 @@ class TestEvaluationHarness(unittest.IsolatedAsyncioTestCase):
         source.version += 1
         await monitor.capture(signal(task_plan, 1), cancellation=self.token)
         frame = (await self.projected(monitor, turn=2))[0]
-        self.assertEqual(frame["event"], "constraint_violated")
+        self.assertEqual(frame["feedback"]["event"], "constraint_violated")
         self.assertIsNone(frame["progress"]["task_progress_delta"])
         self.assertEqual(frame["progress"]["newly_violated_constraints"], ["safe"])
 
@@ -671,12 +674,17 @@ class TestEvaluationHarness(unittest.IsolatedAsyncioTestCase):
             versions[report.run_id] = report.plan.version if report.plan else None
         self.assertEqual(list(versions.values()), ["v1", "v2", None, None])
         self.assertEqual(evaluator.active_run_ids, ())
-        self.assertFalse(
-            any(
-                isinstance(item, TransientInstruction)
-                for item in model.requests[2].messages
-            )
-        )
+        for request in model.requests[2:]:
+            states = [
+                json.loads(item.content)["trajectory_context"]
+                for item in request.messages
+                if isinstance(item, TransientInstruction)
+            ]
+            self.assertEqual(len(states), 1)
+            self.assertEqual(states[0]["state_status"], "unavailable")
+            self.assertIsNone(states[0]["checkpoint"])
+            self.assertNotIn("requirements", states[0])
+            self.assertNotIn("current_facts", states[0])
 
     async def test_cancellation_during_capture_cleans_sources_and_frames(self) -> None:
         source = MutableSource()
@@ -704,7 +712,10 @@ class TestEvaluationHarness(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(source.stopped.is_set())
         self.assertEqual(source.closed, ["run"])
         self.assertEqual(evaluator.active_run_ids, ())
-        self.assertEqual(await self.projected(monitor), [])
+        state = (await self.projected(monitor))[0]
+        self.assertEqual(state["state_status"], "unavailable")
+        self.assertIsNone(state["checkpoint"])
+        self.assertNotIn("current_facts", state)
 
     async def test_tool_batch_observations_and_completion_text_reach_verifier(
         self,
@@ -901,12 +912,16 @@ class TestEvaluationHarness(unittest.IsolatedAsyncioTestCase):
                 outcome = await restored.continue_run()
             self.assertEqual(outcome.result.status, RunStatus.COMPLETED)
             self.assertIsNone(reports[-1].plan)
-            self.assertFalse(
-                any(
-                    isinstance(item, TransientInstruction)
-                    for item in model.requests[0].messages
-                )
-            )
+            states = [
+                json.loads(item.content)["trajectory_context"]
+                for item in model.requests[0].messages
+                if isinstance(item, TransientInstruction)
+            ]
+            self.assertEqual(len(states), 1)
+            self.assertEqual(states[0]["state_status"], "unavailable")
+            self.assertIsNone(states[0]["checkpoint"])
+            self.assertNotIn("requirements", states[0])
+            self.assertNotIn("current_facts", states[0])
 
     async def test_protocol_failure_is_audited_and_still_cleans_run_state(self) -> None:
         async def broken(

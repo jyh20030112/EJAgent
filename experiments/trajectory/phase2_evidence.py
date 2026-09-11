@@ -296,9 +296,9 @@ def _projection_matrix(
     progress: ProgressSnapshot,
 ) -> dict[str, object]:
     projector = TrajectoryContextProjector()
-    expected_visibility = {
-        TrajectoryContextEventKind.FACTS_UPDATED: True,
-        TrajectoryContextEventKind.PROGRESS_EVALUATED: True,
+    expected_feedback = {
+        TrajectoryContextEventKind.FACTS_UPDATED: False,
+        TrajectoryContextEventKind.PROGRESS_EVALUATED: False,
         TrajectoryContextEventKind.CYCLE_SUSPECTED: False,
         TrajectoryContextEventKind.CYCLE_CONFIRMED: True,
         TrajectoryContextEventKind.CONSTRAINT_VIOLATED: True,
@@ -329,7 +329,7 @@ def _projection_matrix(
         fact_capture_complete=True,
     )
     results: dict[str, object] = {}
-    for kind, expected in expected_visibility.items():
+    for kind, expected in expected_feedback.items():
         arguments: dict[str, tuple[str, ...]] = {}
         event_checkpoint = projection_checkpoint
         event_progress = progress
@@ -367,10 +367,12 @@ def _projection_matrix(
                 refuted_hypotheses=("One global route can satisfy both requirements",),
             )
         )
-        content = "" if projected is None else projected.instruction.content
+        content = projected.instruction.content
+        state = json.loads(content)["trajectory_context"]
         results[kind.value] = {
-            "expected_visible": expected,
-            "visible": projected is not None,
+            "state_visible": state["checkpoint"] == checkpoint.checkpoint_id,
+            "expected_feedback_visible": expected,
+            "feedback_visible": state["feedback"] is not None,
             "fingerprint_hidden": checkpoint.state_fingerprint not in content,
             "completion_continues_same_run": (
                 kind is not TrajectoryContextEventKind.COMPLETION_AUDIT_FAILED
@@ -442,7 +444,9 @@ def run_phase2_evidence() -> dict[str, object]:
             stale_report.verdict is TrajectoryVerdict.INSUFFICIENT_EVIDENCE
         ),
         "event_context_matrix_matches_policy": all(
-            bool(item["visible"]) is bool(item["expected_visible"])
+            bool(item["state_visible"])
+            and bool(item["feedback_visible"])
+            is bool(item["expected_feedback_visible"])
             and bool(item["fingerprint_hidden"])
             and bool(item["completion_continues_same_run"])
             for item in projection.values()
@@ -450,7 +454,7 @@ def run_phase2_evidence() -> dict[str, object]:
         ),
     }
     return {
-        "experiment": "trajectory-phase2-entry-evidence-v1",
+        "experiment": "trajectory-phase2-entry-evidence-v2",
         "phase1_fs001_artifact_sha256": PHASE1_FS001_SHA256,
         "domains_observed": [
             "authentication-policy",
