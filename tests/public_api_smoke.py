@@ -71,7 +71,7 @@ def main() -> None:
 
     if not files("ejagent").joinpath("py.typed").is_file():
         raise AssertionError("installed package is missing the py.typed marker")
-    if version("ejagent-core") != "0.6.1":
+    if version("ejagent-core") != "0.7.0":
         raise AssertionError("installed distribution has the wrong version")
 
     if args.expect_no_mcp:

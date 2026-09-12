@@ -43,7 +43,7 @@ def main() -> None:
 
     if "Name: ejagent-core\n" not in metadata:
         raise AssertionError("wheel metadata has the wrong distribution name")
-    if "Version: 0.6.1\n" not in metadata:
+    if "Version: 0.7.0\n" not in metadata:
         raise AssertionError("wheel metadata has the wrong distribution version")
     if "Provides-Extra: mcp" not in metadata:
         raise AssertionError("wheel metadata does not declare the mcp extra")
