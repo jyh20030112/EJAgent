@@ -138,6 +138,32 @@ class TestJudgeOutput(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(saved["judge_attempts"][1]["outcome"], "valid")
             self.assertEqual(saved["cost"]["model_requests"], 2)
 
+    async def test_pydantic_field_errors_steer_the_judge_without_changing_evidence(
+        self,
+    ) -> None:
+        model = JudgeModel()
+        model.transform = lambda item: (
+            {**item, "evidence_refs": "not an array", "rationale": 123}
+            if len(model.requests) == 1
+            else item
+        )
+        report = await self.evaluate(self.evaluator(model))
+        self.assertEqual(report.requirements[0].status, EvaluationStatus.PASS)
+        self.assertEqual(report.cost.model_requests, 2)
+        correction, diagnostic = model.requests[1].messages[1:3]
+        self.assertIsInstance(correction, TransientInstruction)
+        self.assertIsInstance(diagnostic, UserMessage)
+        error = json.loads(diagnostic.content)["structured_output_error"]
+        self.assertEqual(error["kind"], "invalid_schema")
+        self.assertIn("evidence_refs", error["errors"])
+        self.assertIn("rationale", error["errors"])
+        self.assertIn("not an array", error["previous_response_excerpt"])
+        self.assertNotIn("not an array", correction.content)
+        self.assertEqual(model.requests[0].messages[-1], model.requests[1].messages[-1])
+        self.source.version += 1
+        await self.evaluate(self.evaluator(model), run="other")
+        self.assertEqual(len(model.requests[-1].messages), 2)
+
     async def test_fences_do_not_bypass_field_or_reference_validation(self) -> None:
         for changes in (
             {"status": "maybe"},

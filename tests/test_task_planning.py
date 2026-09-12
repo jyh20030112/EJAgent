@@ -5,10 +5,12 @@ import json
 import tempfile
 import unittest
 from collections.abc import AsyncIterator, Callable
+from dataclasses import replace
 from pathlib import Path
 
 from ejagent.contracts import (
     AssistantMessage,
+    CancellationSource,
     CancellationToken,
     CompletionMode,
     CompletionPolicy,
@@ -17,6 +19,7 @@ from ejagent.contracts import (
     ModelResponseCompleted,
     ModelStreamEvent,
     ModelUsage,
+    RunCancelledError,
     RunStatus,
     StepStatus,
     ToolCall,
@@ -190,9 +193,6 @@ class TestModelTaskPlanner(unittest.IsolatedAsyncioTestCase):
         weakened = proposal()
         weakened["steps"][0]["requirement_ids"] = ["invented"]
         cases.append(weakened)
-        completed = proposal()
-        completed["steps"][0]["status"] = "completed"
-        cases.append(completed)
         for value in cases:
             with self.subTest(value=value), self.assertRaises(PlanningError):
                 await planner(value).plan(
@@ -225,6 +225,7 @@ class TestModelTaskPlanner(unittest.IsolatedAsyncioTestCase):
             adapter = ModelTaskPlanner(
                 CapturedModel([AssistantMessage(text)], finish_reason=reason),
                 capabilities=(capability(),),
+                limits=PlannerLimits(max_format_retries=0),
             )
             with self.assertRaises(PlanningError):
                 await adapter.plan(
@@ -252,6 +253,150 @@ class TestModelTaskPlanner(unittest.IsolatedAsyncioTestCase):
                 PlanningRequest("r", "q"), cancellation=CancellationToken()
             )
         self.assertEqual(model.requests, [])
+
+    async def test_format_retries_validate_nested_fields_and_account_for_all_calls(
+        self,
+    ) -> None:
+        invalid = proposal()
+        invalid["steps"][0]["status"] = "completed"
+        invalid["steps"][0]["description"] = 123
+        texts = ["not JSON", json.dumps(invalid), json.dumps(proposal())]
+        model = CapturedModel([AssistantMessage(text) for text in texts])
+        adapter = ModelTaskPlanner(
+            model,
+            capabilities=(capability(),),
+            limits=PlannerLimits(max_format_retries=2),
+        )
+        result = await adapter.plan(
+            PlanningRequest("run", "Original goal"), cancellation=CancellationToken()
+        )
+        self.assertEqual(result.requests, 3)
+        self.assertEqual(result.usage.total_tokens, 45)
+        self.assertEqual(result.usage.input_tokens, 30)
+        for request in model.requests:
+            self.assertEqual(request.messages[0], model.requests[0].messages[0])
+            self.assertEqual(request.messages[-1], model.requests[0].messages[-1])
+            self.assertEqual(request.tools, ())
+            self.assertEqual(request.response_format, {"type": "json_object"})
+        error = json.loads(model.requests[2].messages[2].content)[
+            "structured_output_error"
+        ]
+        self.assertIn("steps.0.status", error["errors"])
+        self.assertIn("steps.0.description", error["errors"])
+        self.assertEqual(error["previous_response_excerpt"], texts[1])
+        self.assertEqual(model.requests[2].messages[1].source, "planner:output_format")
+
+    async def test_fenced_output_is_accepted_and_only_reminder_reaches_next_query(
+        self,
+    ) -> None:
+        text = json.dumps(proposal("private previous task"))
+        model = CapturedModel(
+            [
+                AssistantMessage("```json\n" + text + "\n```"),
+                AssistantMessage(json.dumps(proposal())),
+                AssistantMessage(json.dumps(proposal())),
+            ]
+        )
+        adapter = ModelTaskPlanner(model, capabilities=(capability(),))
+        for index in range(3):
+            result = await adapter.plan(
+                PlanningRequest(str(index), "New query"),
+                cancellation=CancellationToken(),
+            )
+            self.assertEqual(result.requests, 1)
+        self.assertEqual(len(model.requests[0].messages), 2)
+        self.assertEqual(len(model.requests[1].messages), 3)
+        self.assertIn("Do not use backticks", model.requests[1].messages[1].content)
+        self.assertNotIn("private previous task", str(model.requests[1].messages))
+        self.assertEqual(len(model.requests[2].messages), 2)
+
+    async def test_retry_budget_exhaustion_never_returns_a_plan(self) -> None:
+        for limits, calls in (
+            (PlannerLimits(max_format_retries=0), 1),
+            (PlannerLimits(max_format_retries=2), 3),
+            (PlannerLimits(max_tokens=15), 1),
+            (PlannerLimits(max_tokens=10), 1),
+        ):
+            with self.subTest(limits=limits):
+                model = CapturedModel([AssistantMessage("bad JSON")] * 3)
+                adapter = ModelTaskPlanner(
+                    model, capabilities=(capability(),), limits=limits
+                )
+                with self.assertRaises(PlanningError) as caught:
+                    await adapter.plan(
+                        PlanningRequest("r", "q"), cancellation=CancellationToken()
+                    )
+                self.assertEqual(caught.exception.requests, calls)
+                self.assertEqual(caught.exception.usage.total_tokens, calls * 15)
+                self.assertEqual(len(model.requests), calls)
+
+    async def test_retry_context_counts_toward_prompt_limit(self) -> None:
+        model = CapturedModel([AssistantMessage(json.dumps(proposal()))])
+        adapter = ModelTaskPlanner(model, capabilities=(capability(),))
+        await adapter.plan(PlanningRequest("r", "q"), cancellation=CancellationToken())
+        size = sum(len(m.content.encode()) for m in model.requests[0].messages)
+        adapter.limits = replace(adapter.limits, max_prompt_bytes=size + 1)
+        model.replies = [AssistantMessage("invalid JSON")]
+        with self.assertRaisesRegex(PlanningError, "context exceeds") as caught:
+            await adapter.plan(
+                PlanningRequest("r", "q"), cancellation=CancellationToken()
+            )
+        self.assertEqual(caught.exception.requests, 1)
+        self.assertEqual(len(model.requests), 2)
+
+    async def test_missing_usage_prevents_unaccounted_retries(self) -> None:
+        class NoUsage(CapturedModel):
+            async def stream(self, request, *, cancellation):
+                async for event in super().stream(request, cancellation=cancellation):
+                    yield replace(event, usage=None)
+
+        model = NoUsage([AssistantMessage("bad JSON")])
+        adapter = ModelTaskPlanner(model, capabilities=(capability(),))
+        with self.assertRaisesRegex(PlanningError, "usage is unavailable") as caught:
+            await adapter.plan(
+                PlanningRequest("r", "q"), cancellation=CancellationToken()
+            )
+        self.assertEqual(caught.exception.requests, 1)
+        self.assertIsNone(caught.exception.usage)
+
+    async def test_retries_share_timeout_and_close_cancelled_stream(self) -> None:
+        class BlocksRetry(CapturedModel):
+            def __init__(self):
+                super().__init__([AssistantMessage("bad JSON")])
+                self.started = asyncio.Event()
+                self.closed = asyncio.Event()
+
+            async def stream(self, request, *, cancellation):
+                if not self.requests:
+                    async for event in super().stream(
+                        request, cancellation=cancellation
+                    ):
+                        yield event
+                else:
+                    self.started.set()
+                    try:
+                        await asyncio.Event().wait()
+                    finally:
+                        self.closed.set()
+
+        for cancel in (False, True):
+            with self.subTest(cancel=cancel):
+                model = BlocksRetry()
+                token = CancellationSource()
+                adapter = ModelTaskPlanner(
+                    model,
+                    capabilities=(capability(),),
+                    limits=PlannerLimits(timeout_seconds=0.1),
+                )
+                task = asyncio.create_task(
+                    adapter.plan(PlanningRequest("r", "q"), cancellation=token.token)
+                )
+                await model.started.wait()
+                if cancel:
+                    token.cancel()
+                with self.assertRaises(RunCancelledError if cancel else PlanningError):
+                    await task
+                self.assertTrue(model.closed.is_set())
 
 
 class TestPlannedHarness(unittest.IsolatedAsyncioTestCase):
@@ -301,10 +446,33 @@ class TestPlannedHarness(unittest.IsolatedAsyncioTestCase):
             ]
         )
         store = JsonlSessionStore(self.root / "sessions")
-        harness = self.harness(actor, store=store)
+        planner_model = CapturedModel(
+            [
+                AssistantMessage("private malformed planner response"),
+                AssistantMessage(json.dumps(proposal())),
+            ]
+        )
+        harness = self.harness(
+            actor,
+            store=store,
+            planner=ModelTaskPlanner(planner_model, capabilities=(capability(),)),
+        )
         async with harness:
             outcome = await harness.run("Create the artifact")
         self.assertEqual(outcome.result.status, RunStatus.COMPLETED)
+        preparation = next(
+            r for r in outcome.audit_records if r.kind == "planning_usage"
+        )
+        self.assertEqual(preparation.payload["model_requests"], 2)
+        self.assertEqual(preparation.payload["usage"]["total_tokens"], 30)
+        self.assertIn("planner:output_format", str(planner_model.requests[1].messages))
+        for value in (
+            str(actor.requests),
+            str(harness.messages),
+            str(outcome.audit_records),
+        ):
+            self.assertNotIn("planner:output_format", value)
+            self.assertNotIn("private malformed planner response", value)
         self.assertEqual(harness.last_execution_plan.version, 4)
         self.assertEqual(
             harness.last_execution_plan.steps[0].status, StepStatus.COMPLETED
@@ -348,8 +516,31 @@ class TestPlannedHarness(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn("execution_plan_updated", persisted)
         self.assertIn("task_planned", persisted)
+        self.assertNotIn("planner:output_format", persisted)
+        self.assertNotIn("private malformed planner response", persisted)
         self.assertEqual(actor.starts, 1)
         self.assertEqual(actor.stops, 1)
+
+    async def test_exhausted_output_recovery_never_starts_actor_or_commits_task(
+        self,
+    ) -> None:
+        actor = CapturedModel([])
+        planner_model = CapturedModel([AssistantMessage("bad JSON")] * 2)
+        async with self.harness(
+            actor,
+            planner=ModelTaskPlanner(planner_model, capabilities=(capability(),)),
+        ) as harness:
+            outcome = await harness.run("Create the artifact")
+        self.assertFalse(outcome.result.succeeded)
+        self.assertEqual(actor.requests, [])
+        self.assertFalse(self.path.exists())
+        self.assertEqual(harness.revision, 0)
+        self.assertIsNone(harness.last_task_definition)
+        preparation = next(
+            r for r in outcome.audit_records if r.kind == "planning_usage"
+        )
+        self.assertEqual(preparation.payload["model_requests"], 2)
+        self.assertEqual(preparation.payload["usage"]["total_tokens"], 30)
 
     async def test_invalid_updates_leave_plan_unchanged(self) -> None:
         actor = CapturedModel(

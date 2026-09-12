@@ -26,6 +26,9 @@ def main() -> None:
     with zipfile.ZipFile(wheel) as archive:
         names = archive.namelist()
         for required in (
+            "ejagent/_structured_output.py",
+            "ejagent/planning/_output.py",
+            "ejagent/evaluation/_output.py",
             "ejagent/planning/model.py",
             "ejagent/contracts/planning.py",
             "ejagent/evaluation/workspace.py",

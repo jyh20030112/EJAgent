@@ -512,6 +512,7 @@ version = "0.7.0"
 source = { editable = "." }
 dependencies = [
     { name = "openai" },
+    { name = "pydantic" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
 ]
@@ -539,6 +540,7 @@ requires-dist = [
     { name = "anthropic", marker = "extra == 'anthropic'", specifier = ">=0.104.1" },
     { name = "fastmcp", marker = "extra == 'mcp'", specifier = ">=3.4.2" },
     { name = "openai", specifier = ">=2.41.0" },
+    { name = "pydantic", specifier = ">=2.12,<3" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "streamlit", marker = "extra == 'streamlit'", specifier = ">=1.58.0" },
