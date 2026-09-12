@@ -168,7 +168,12 @@ OpenAI-compatible adapter forwards `ModelRequest.response_format` unchanged as a
 detached JSON object. Callers may supply a provider-supported strict schema via
 `ModelJudge(model, response_format={"type": "json_schema", "json_schema": ...})`.
 JSON mode alone does not validate fields or evidence references; local validation
-always runs. Set `response_format=None` for prompt-only providers. The native
+always runs. A strict Pydantic `JudgeOutput` model defines fields, types, enums,
+and self-contained verdict consistency rules; its generated JSON Schema is
+included in the system prompt. Extra fields and implicit type conversions are
+rejected. Current criterion/evidence binding remains a separate check after
+schema validation. See [shared structured output recovery](structured-output.md).
+Set `response_format=None` for prompt-only providers. The native
 Anthropic adapter currently rejects this passthrough option explicitly; configure
 its Judge with `response_format=None` instead of silently dropping the option.
 Actor requests omit it unless explicitly configured by their caller.
@@ -186,6 +191,13 @@ raw JSON with the required fields without changing the criterion or evidence.
 The instruction survives cache hits, clears after a valid plain JSON response,
 counts toward the prompt byte limit, and is removed when the Run closes. It
 never enters Actor Context or committed Conversation.
+
+Within a retry sequence, an additional temporary `UserMessage` supplies the JSON
+syntax location or Pydantic field-path errors and a bounded excerpt of the failed
+response. This message is explicitly diagnostic data; the steer itself contains
+fixed instructions. The original criterion/evidence payload remains unchanged.
+Diagnostic excerpts are not carried into another evaluation or saved in the
+evaluation report. Only the generic reminder can survive until the next decision.
 
 `JudgeLimits.max_format_retries` defaults to **1** (set **0** to disable). Invalid
 JSON or response fields may trigger one internal Judge retry over the same

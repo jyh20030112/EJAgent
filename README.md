@@ -134,6 +134,9 @@ explicit semantic criteria. A semantic criterion can declare `guard_method`:
 the deterministic guard must return `pass` before the LLM is called. Both paths
 produce a shared evaluation report; deterministic checks make no model requests.
 
+Planner and Judge JSON outputs use strict Pydantic schemas and bounded format
+retries with temporary correction context; see [structured output recovery](docs/structured-output.md).
+
 The library implements evidence collection, verification orchestration, result
 validation, and reporting. Built-in sources cover files, workspaces, commands,
 and probes. The host configures sources, registers verification capabilities,

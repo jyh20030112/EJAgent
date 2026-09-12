@@ -57,19 +57,32 @@ verifier proves. A passing command proves its configured checks passed; it does
 not automatically verify every natural-language claim. Catalog design and any
 semantic checks must match the application's actual goals.
 
-Unknown capabilities, omitted mandatory capabilities, unsupported goals, invalid
-JSON, incomplete output, and steps that fail to cover requirements reject
+Unknown capabilities, omitted mandatory capabilities, unsupported goals, incomplete
+output, and steps that fail to cover requirements reject
 preparation before actor actions. `EvaluationMonitor.validate_plan()` also rejects
 unconfigured sources/methods or a missing semantic Judge. Custom monitors own
 validation of their own capabilities.
 
-`ModelTaskPlanner` makes one model request per preparation. Default bounds are
-60 seconds, 4,096 output tokens, 64 KiB prompt, and 32 KiB response. The default
+`ModelTaskPlanner` normally makes one model request per preparation. Syntax and
+Pydantic schema failures may trigger `PlannerLimits.max_format_retries` additional
+requests (default **1**, **0** disables retries). Requests share a 60-second
+timeout and a 16,384-token total budget; each has a 4,096-output-token cap,
+64 KiB prompt limit, and 32 KiB response limit. Reported usage is summed across
+attempts in `PlanningResult` or `PlanningError`; missing usage stops preparation
+and is reported as unknown rather than a complete total. The default
 `response_format` is passed through as `{"type": "json_object"}`; use `None` for
 providers that require prompt-only JSON. A single complete Markdown JSON fence is
-accepted; partial JSON, duplicate keys and surrounding prose are rejected. There
-is no automatic planning retry or automatic environment investigation. Supply
-investigation results in `environment` or use a custom `TaskPlanner`.
+accepted after schema validation without an extra request. The next request on
+that planner instance gets only a generic format reminder; no previous task or
+response is carried into another preparation. The reminder clears after valid
+plain JSON. Invalid JSON and schema errors receive temporary correction context
+within the same preparation, and exhausted retries raise `PlanningError`.
+
+The shared [structured output module](structured-output.md) derives the prompt
+schema from the strict Pydantic `PlannerOutput` model. Capability and execution
+plan binding follow structural validation and are not retried as format errors.
+There is no automatic environment investigation: supply results in `environment`
+or use a custom `TaskPlanner`.
 
 ## Connect preparation, feedback, and execution
 
