@@ -25,7 +25,7 @@ next action.
 
 Use it to build assistants, coding agents, research agents, and task-oriented
 applications. Model providers, capabilities, context strategies, storage, and
-evaluators can be composed for the application's domain.
+evaluators can be composed for the application's domain
 
 ## What You Can Build
 
@@ -219,18 +219,18 @@ followed by verified completion in the same Run (three demo turns).
 
 ## Customize Every Boundary
 
-| You want to change               | Extension point    |
-| -------------------------------- | ------------------ |
-| Model provider or protocol       | `ModelPort`        |
-| Local or remote tool backend     | `ToolExecutor`     |
-| Context selection and projection | `ContextPipeline`  |
-| Long-history summarization       | `ContextCompactor` |
-| Session persistence              | `SessionStore`     |
-| Logging, tracing, or metrics     | `RunObserver`      |
-| Task and initial plan generation | `TaskPlanner`      |
-| Evaluation evidence collection  | `EvidenceSource`   |
-| Deterministic acceptance rules   | `Verifier`         |
-| Online trajectory observation   | `TrajectoryMonitor` in `ejagent.kernel` |
+| You want to change               | Extension point                         |
+| -------------------------------- | --------------------------------------- |
+| Model provider or protocol       | `ModelPort`                             |
+| Local or remote tool backend     | `ToolExecutor`                          |
+| Context selection and projection | `ContextPipeline`                       |
+| Long-history summarization       | `ContextCompactor`                      |
+| Session persistence              | `SessionStore`                          |
+| Logging, tracing, or metrics     | `RunObserver`                           |
+| Task and initial plan generation | `TaskPlanner`                           |
+| Evaluation evidence collection   | `EvidenceSource`                        |
+| Deterministic acceptance rules   | `Verifier`                              |
+| Online trajectory observation    | `TrajectoryMonitor` in `ejagent.kernel` |
 
 These are narrow, provider-neutral contracts. Implement only the part your
 application needs, then compose it through `AgentHarness`. The built-in online
