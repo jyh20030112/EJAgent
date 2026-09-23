@@ -21,7 +21,7 @@ EJAgent Core is a Python **Agent Harness** that brings together context,
 tools, state, control, and evaluation around an agent's decisions. It helps an
 agent carry work across tasks, recover committed state after restarts, accept
 user intervention, and use verified environment feedback when choosing its
-next action.
+next action
 
 Use it to build assistants, coding agents, research agents, and task-oriented
 applications. Model providers, capabilities, context strategies, storage, and
