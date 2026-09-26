@@ -37,7 +37,7 @@ evaluators can be composed for the application's domain
   them after a process restart.
 - **Tool-using agents** — expose Python functions, compose multiple tool
   executors, or connect MCP services through one consistent interface.
-- **Controllable agents** — cancel active work, steer the next model step,
+- **Controllable agents** — cancel active work, steer the next model step
   queue follow-up tasks, and enforce turn or token limits.
 - **Context-aware agents** — inject local Skills, derive summaries for long
   conversations, or implement your own context policy.
