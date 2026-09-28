@@ -34,7 +34,7 @@ evaluators can be composed for the application's domain
 - **Stateful assistants** — keep typed conversation history across multiple
   tasks and continue from the latest committed state.
 - **Durable agents** — persist sessions to an append-only journal and recover
-  them after a process restart.
+  them after a process restart
 - **Tool-using agents** — expose Python functions, compose multiple tool
   executors, or connect MCP services through one consistent interface.
 - **Controllable agents** — cancel active work, steer the next model step
