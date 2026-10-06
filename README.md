@@ -46,7 +46,7 @@ evaluators can be composed for the application's domain
 - **Agents with trajectory feedback** — connect a host evaluator to assess
   Requirement satisfaction, Constraints, and repeated State/Action patterns,
   then project relevant feedback into the next model Context.
-- **Provider-flexible applications** — use OpenAI-compatible endpoints,
+- **Provider-flexible applications** — use OpenAI-compatible endpoints
   Anthropic, or implement a provider adapter for another model API.
 
 ## Why EJAgent Core
