@@ -4,23 +4,23 @@
 
 EJAgent is an agent harness: it prepares tasks, orchestrates execution and
 evaluation, builds model context, and commits conversation state. The application
-using EJAgent owns its environment, credentials, tools, and acceptance capabilities.
+using EJAgent owns its environment, credentials, tools, and acceptance capabilities
 
 ## Choose and configure modules
 
-| Module | Configuration and application responsibilities |
-| --- | --- |
-| [Harness](harness/README.md) | Assembly, completion policy, Run limits, controls, lifecycle |
-| [Evaluation](evaluation/README.md) | Evidence sources, verifier registration, semantic Judge, budgets |
-| [Planning](planning/README.md) | Capability catalog, task generation, plan updates, output recovery |
-| [Providers](providers/README.md) | Model connections, environment variables, request options |
-| [Tools](tools/README.md) | Tool schemas and functions, MCP, execution control |
-| [Context](context/README.md) | Projection, compaction, custom compactor, pipeline composition |
-| [Skills](skills/README.md) | Local files, discovery, explicit instruction selection |
-| [Storage](storage/README.md) | Persistence, lock timeout, custom store and audit reader |
-| [Contracts](contracts/README.md) | Extension interfaces, immutable input/output types |
-| [Kernel](kernel/README.md) | Direct execution integration and checkpoint boundary |
-| [Internal trajectory](_trajectory/README.md) | Analysis, context projection, internal tuning boundaries |
+| Module                                       | Configuration and application responsibilities                     |
+| -------------------------------------------- | ------------------------------------------------------------------ |
+| [Harness](harness/README.md)                 | Assembly, completion policy, Run limits, controls, lifecycle       |
+| [Evaluation](evaluation/README.md)           | Evidence sources, verifier registration, semantic Judge, budgets   |
+| [Planning](planning/README.md)               | Capability catalog, task generation, plan updates, output recovery |
+| [Providers](providers/README.md)             | Model connections, environment variables, request options          |
+| [Tools](tools/README.md)                     | Tool schemas and functions, MCP, execution control                 |
+| [Context](context/README.md)                 | Projection, compaction, custom compactor, pipeline composition     |
+| [Skills](skills/README.md)                   | Local files, discovery, explicit instruction selection             |
+| [Storage](storage/README.md)                 | Persistence, lock timeout, custom store and audit reader           |
+| [Contracts](contracts/README.md)             | Extension interfaces, immutable input/output types                 |
+| [Kernel](kernel/README.md)                   | Direct execution integration and checkpoint boundary               |
+| [Internal trajectory](_trajectory/README.md) | Analysis, context projection, internal tuning boundaries           |
 
 ## Minimum application setup
 
