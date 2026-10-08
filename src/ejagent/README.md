@@ -40,7 +40,7 @@ automatically from a user's query.
 
 Each module documents constructor defaults, scope, prerequisites, and failure
 behavior. Actor Run limits, Planner/Judge budgets, and completion retries are
-separate controls. Result enums such as `RunStatus` describe outcomes, rather than
+separate controls. Result enums such as `RunStatus` describe outcomes, rather that.
 switching features on. Internal constants are not public configuration options.
 
 For console logging, [logger.py](logger.py) exposes
