@@ -46,7 +46,7 @@ switching features on. Internal constants are not public configuration options.
 For console logging, [logger.py](logger.py) exposes
 `setup_logger(name="ejagent", level="INFO", fmt=...)`; the default format is
 `%(asctime)s | %(levelname)-8s | %(name)s | %(message)s`.
-Existing handlers are retained, so subsequent calls do not replace their format.
+Existing handlers are retained, so subsequent calls do not replace their format
 
 See the [usage guide](../../docs/usage-guide.md) for complete integration recipes
 and [structured output guide](../../docs/structured-output.md) for JSON validation.
